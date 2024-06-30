@@ -14,11 +14,81 @@ datasource db {
 }
 
 model User {
-  id       String @id @default(auto()) @map("_id") @db.ObjectId
-  name     String
-  email    String @unique
-  password String
-  verified Boolean @default(true)  // Default to true since we are skipping verification
+  id        String @id @default(auto()) @map("_id") @db.ObjectId
+  firstName String
+  lastName  String
+  email     String @unique
+  password  String
+  verified  Boolean @default(true)  // Default to true since we are skipping verification
   verificationToken String?  // This can be removed if not needed
+  stores    Store[]
 }
+
+model Store {
+  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  name        String
+  shopifyName String
+  accessToken String
+  lastOrderSync  DateTime @default(now())
+  lastProductSync DateTime @default(now())
+  userId      String @db.ObjectId
+  user        User @relation(fields: [userId], references: [id])
+  orders      Order[]
+  products    Product[]
+}
+
+model Order {
+  id               String     @id @default(auto()) @map("_id") @db.ObjectId
+  date             DateTime
+  orderId          String
+  customer         String
+  customerId       String?
+  fulfillmentStatus String
+  paid             Float
+  tax              Float
+  shippingCost     Float
+  discount         Float
+  grossProfit      Float
+  cogs             Float
+  storeId          String     @db.ObjectId
+  store            Store      @relation(fields: [storeId], references: [id])
+  lineItems        LineItem[]
+}
+
+model LineItem {
+  id               String @id @default(auto()) @map("_id") @db.ObjectId
+  lineItemId       String
+  productId         String
+  variantId       String
+  name             String
+  quantity         Int
+  paid             Float
+  discount         Float
+  productCost      Float
+  preTaxGrossProfit Float
+  preTaxGrossMargin Float
+  orderId          String @db.ObjectId
+  order            Order @relation(fields: [orderId], references: [id])
+}
+
+model Product {
+  id         String   @id @default(auto()) @map("_id") @db.ObjectId
+  productId  String   @unique
+  title      String
+  storeId    String   @db.ObjectId
+  store      Store    @relation(fields: [storeId], references: [id])
+  variants   Variant[]
+}
+
+model Variant {
+  id                String   @id @default(auto()) @map("_id") @db.ObjectId
+  variantId         String   @unique
+  title             String
+  price             Float
+  inventoryQuantity Int
+  productId         String   @db.ObjectId
+  product           Product  @relation(fields: [productId], references: [id])
+}
+
+
 
