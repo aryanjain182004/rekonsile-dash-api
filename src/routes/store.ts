@@ -3,7 +3,7 @@ import { Request, Response } from 'express';
 import { authMiddleware } from '../middleware/authMiddleware';
 import { PrismaClient } from '@prisma/client';
 import Shopify, { IOrder as ShopifyOrder } from 'shopify-api-node';
-import { format } from 'date-fns';
+import { eachDayOfInterval, format, subYears } from 'date-fns';
 import { getDatesInMonth } from '../utils/date';
 
 const router = Router();
@@ -45,6 +45,7 @@ router.get('/', authMiddleware, async(req: any, res: Response) => {
             select: {
                 id: true,
                 name: true,
+                lastMetricSync: true,
             }
         })
         res.status(200).json({
@@ -89,13 +90,18 @@ const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTi
         await prisma.order.create({
           data: {
             date: new Date(order.created_at),
-            orderId: order.id.toString(),
+            orderId: order.order_number.toString(),
+            source: order.source_name,
             customer: order.customer ? `${order.customer.first_name} ${order.customer.last_name}` : 'Unknown',
-            customerId: order.customer?.id.toString(),
+            customerId: order.customer?.id.toString() || "",
             fulfillmentStatus: order.fulfillment_status ? order.fulfillment_status : "Unfulfilled",
             paid: paid,
             tax: tax,
-            shippingCost: parseFloat((order.total_shipping_price_set?.presentment_money.amount).toString()) || 0,
+            shippingCost: 0,
+            //@ts-ignore
+            shippingPaid: parseFloat(order.total_shipping_price_set.shop_money.amount),
+            shippingCountry: order.shipping_address?.country || "N/A",
+            shippingRegion: order.shipping_address?.province_code || "N/A",
             discount: parseFloat(order.total_discounts || "0"),
             grossProfit: grossProfit,
             cogs: cogs,
@@ -232,13 +238,18 @@ router.post('/resync-orders', async (req: Request, res: Response) => {
         await prisma.order.create({
           data: {
             date: new Date(order.created_at),
-            orderId: order.id.toString(),
+            orderId: order.order_number.toString(),
+            source: order.source_name,
             customer: order.customer ? `${order.customer.first_name} ${order.customer.last_name}` : 'Unknown',
-            customerId: order.customer?.id.toString(),
+            customerId: order.customer?.id.toString() || "",
             fulfillmentStatus: order.fulfillment_status ? order.fulfillment_status : "Unfulfilled",
             paid: paid,
             tax: tax,
-            shippingCost: parseFloat((order.total_shipping_price_set?.presentment_money.amount).toString()) || 0,
+            shippingCost: 0,
+            //@ts-ignore
+            shippingPaid: parseFloat(order.total_shipping_price_set.shop_money.amount),
+            shippingCountry: order.shipping_address?.country || "N/A",
+            shippingRegion: order.shipping_address?.province_code || "N/A",
             discount: parseFloat(order.total_discounts || "0"),
             grossProfit: grossProfit,
             cogs: cogs,
@@ -491,17 +502,25 @@ interface ExportedLineItem {
     preTaxGrossMargin: string;
 }
   
-router.post('/orders', async (req: Request, res: Response) => {
-    const { shopId }: ExportOrdersRequest = req.body;
-  
-    if (!shopId) {
-      return res.status(400).send('Missing required parameter: shopId');
-    }
+router.post('/fetch-orders', async (req: Request, res: Response) => {
+  const { shopId, startDate, endDate } = req.body;
+
+  if (!shopId || !startDate || !endDate) {
+    return res.status(400).send('Missing required parameters: shopId, startDate, or endDate');
+  }
   
     try {
+
+      const start = new Date(startDate)
+      const end = new Date(endDate);
+      end.setHours(23, 59, 59, 999);
       const orders = await prisma.order.findMany({
         where: {
           storeId: shopId,
+          date: {
+            gte: start,
+            lte: end,
+          }
         },
         include: {
           lineItems: true,
@@ -523,9 +542,13 @@ router.post('/orders', async (req: Request, res: Response) => {
           date: format(new Date(order.date), 'dd MMM yyyy'),
           orderId: parseInt(order.orderId, 10),
           customer: order.customer,
+          source: order.source,
           fulfillmentStatus: order.fulfillmentStatus,
           paid: order.paid,
           shippingCost: order.shippingCost,
+          shippingPaid: order.shippingPaid,
+          shippingCountry: order.shippingCountry,
+          shippingRegion: order.shippingRegion,
           discount: order.discount,
           cogs: parseFloat(order.cogs.toFixed(2)),
           grossProfit: parseFloat(order.grossProfit.toFixed(2)),
@@ -540,23 +563,32 @@ router.post('/orders', async (req: Request, res: Response) => {
     }
 });
 
-router.post('/products', async (req: Request, res: Response) => {
-  const { shopId } = req.body;
+router.post('/fetch-products', async (req: Request, res: Response) => {
+  const { shopId, startDate, endDate } = req.body;
 
-  if (!shopId) {
-    return res.status(400).send('Missing required parameter: shopId');
+  if (!shopId || !startDate || !endDate) {
+    return res.status(400).send('Missing required parameters: shopId, startDate, or endDate');
   }
 
   try {
-    // Fetch products and variants from the database for the given shop
     const products = await prisma.product.findMany({
-      where: { storeId: shopId },
+      where: { 
+        storeId: shopId
+      },
       include: { variants: true },
     });
 
-    // Fetch orders and lineItems from the database for the given shop
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    end.setHours(23, 59, 59, 999);
     const orders = await prisma.order.findMany({
-      where: { storeId: shopId },
+      where: { 
+        storeId: shopId,
+        date: {
+          gte: start,
+          lte: end,
+        }
+      },
       include: { lineItems: true },
     });
 
@@ -566,7 +598,7 @@ router.post('/products', async (req: Request, res: Response) => {
     let totalCogs = 0;
     let totalProductMargin = 0;
 
-    const productData = products.map((product) => {
+    const productData = products.reduce((acc, product) => {
       const productVariants = product.variants;
 
       const stock = productVariants.reduce((total, variant) => total + variant.inventoryQuantity, 0);
@@ -580,6 +612,10 @@ router.post('/products', async (req: Request, res: Response) => {
         }, 0);
         return total + variantSales;
       }, 0);
+
+      if (sales === 0) {
+        return acc; // Skip products with no sales
+      }
 
       const revenue = productVariants.reduce((total, variant) => {
         const variantRevenue = orders.reduce((sum, order) => {
@@ -616,19 +652,20 @@ router.post('/products', async (req: Request, res: Response) => {
           stock: variant.inventoryQuantity,
           price: variant.price,
           sales: variantSales,
-          productCost: variantProductCost,
+          productCost: parseFloat(variantProductCost.toFixed(2)),
           packagingFee: 0.00,
           transactionFee: 0.00,
-          cogs: variantCogs,
+          cogs: parseFloat(variantCogs.toFixed(2)),
           fulfillmentCost: 0.00,
           bepRoas: 1.71,
           revenue: variantRevenue,
-          productMargin: variantProductMargin,
+          productMargin: parseFloat(variantProductMargin.toFixed(2)),
           productMarginPercent: 66,
         };
       });
 
-      return {
+      //@ts-ignore
+      acc.push({
         name: product.title,
         stock,
         price: {
@@ -637,45 +674,53 @@ router.post('/products', async (req: Request, res: Response) => {
         },
         sales,
         productCost: {
-          high: highPrice,
-          low: lowPrice,
+          high: Math.max(...variants.map(v => parseFloat(v.productCost.toFixed(2)))),
+          low: Math.min(...variants.map(v => parseFloat(v.productCost.toFixed(2)))),
         },
         packagingFee: 0.00,
         transactionFee: 0.00,
         cogs: {
-          high: highPrice,
-          low: lowPrice,
+          high: Math.max(...variants.map(v => parseFloat(v.cogs.toFixed(2)))),
+          low: Math.min(...variants.map(v => parseFloat(v.cogs.toFixed(2)))),
         },
         fulfillmentCost: 0.00,
         bepRoas: 1.71,
         revenue,
-        productMargin,
+        productMargin: parseFloat(productMargin.toFixed(2)),
         productMarginPercent: 66,
         variants,
-      };
-    });
+      });
+
+      return acc;
+    }, []);
 
     const summary = {
       stock: totalStock,
       price: {
-        high: Math.max(...products.map(p => Math.max(...p.variants.map(v => v.price)))),
-        low: Math.min(...products.map(p => Math.min(...p.variants.map(v => v.price)))),
+        //@ts-ignore
+        high: Math.max(...productData.map(p => p.price.high)),
+        //@ts-ignore
+        low: Math.min(...productData.map(p => p.price.low)),
       },
       sales: totalSales,
       productCost: {
-        high: Math.max(...products.map(p => Math.max(...p.variants.map(v => v.price)))),
-        low: Math.min(...products.map(p => Math.min(...p.variants.map(v => v.price)))),
+        //@ts-ignore
+        high: Math.max(...productData.map(p => parseFloat(p.productCost.high.toFixed(2)))),
+        //@ts-ignore
+        low: Math.min(...productData.map(p => parseFloat(p.productCost.low.toFixed(2)))),
       },
       packagingFee: 0.00,
       transactionFee: 0.00,
       cogs: {
-        high: Math.max(...products.map(p => Math.max(...p.variants.map(v => v.price * 0.34)))),
-        low: Math.min(...products.map(p => Math.min(...p.variants.map(v => v.price * 0.34)))),
+        //@ts-ignore
+        high: Math.max(...productData.map(p => parseFloat(p.cogs.high.toFixed(2)))),
+        //@ts-ignore
+        low: Math.min(...productData.map(p => parseFloat(p.cogs.low.toFixed(2)))),
       },
       fulfillmentCost: 0.00,
       bepRoas: 1.71,
-      revenue: totalRevenue,
-      productMargin: totalProductMargin,
+      revenue: parseFloat(totalRevenue.toFixed(2)),
+      productMargin: parseFloat(totalProductMargin.toFixed(2)),
       productMarginPercent: 66,
     };
 
@@ -686,7 +731,1105 @@ router.post('/products', async (req: Request, res: Response) => {
   }
 });
 
-router.post('/metrics', async(req: Request, res: Response) => {
+
+
+const getDatesInInterval = (startDate: Date, endDate: Date) => {
+  return eachDayOfInterval({ start: startDate, end: endDate });
+}
+
+router.post('/sync-metrics', async (req: Request, res: Response) => {
+  const { shopId } = req.body;
+  if (!shopId) {
+    return res.status(400).send('Missing required parameter: shopId');
+  }
+
+  try {
+    const orders = await prisma.order.findMany({
+      where: { storeId: shopId },
+      include: { lineItems: true },
+    });
+
+    const endDate = new Date();
+    const startDate = subYears(endDate, 5);
+    const timePeriod = getDatesInInterval(startDate, endDate);
+
+    const totalSalesValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.paid;
+        }
+      });
+      return totalSales;
+    });
+
+    const taxesValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.tax || 0;
+        }
+      });
+      return totalSales;
+    });
+
+    const netSalesValues = totalSalesValues.map((v, i) => v - taxesValues[i]);
+
+    const cogsValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.cogs;
+        }
+      });
+      return totalSales;
+    });
+
+    const grossProfitValues = netSalesValues.map((v, i) => v - cogsValues[i]);
+
+    const grossProfitMarginValues = grossProfitValues.map((v, i) =>
+      netSalesValues[i] ? (v / netSalesValues[i]) * 100 : 0
+    );
+
+    const cogsMarginValues = cogsValues.map((v, i) => (netSalesValues[i] ? (v / netSalesValues[i]) * 100 : 0));
+
+    const ordersValues = timePeriod.map((date) => {
+      let number = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          number++;
+        }
+      });
+      return number;
+    });
+
+    // Fetch existing customer order histories
+    const existingCustomers = await prisma.customerOrderHistory.findMany({
+      where: { shopId },
+    });
+
+    const customerOrderHistory = existingCustomers.reduce((acc, customer) => {
+      acc[customer.customerId] = customer.orderDates;
+      return acc;
+    }, {} as { [key: string]: Date[] });
+
+    // Update customer order histories
+    for (const order of orders) {
+      const { customerId, date } = order;
+      if (customerId) {
+        if (!customerOrderHistory[customerId]) {
+          customerOrderHistory[customerId] = [];
+        }
+        customerOrderHistory[customerId].push(date);
+      }
+    }
+
+    // Save updated customer order histories
+    for (const [customerId, orderDates] of Object.entries(customerOrderHistory)) {
+      await prisma.customerOrderHistory.upsert({
+        where: {
+          customerId_shopId: { customerId, shopId },
+        },
+        update: {
+          orderDates,
+        },
+        create: {
+          customerId,
+          shopId,
+          orderDates,
+        },
+      });
+    }
+
+    const firstOrderDates: any = {};
+    orders.forEach((order) => {
+      const orderDate = order.date.toISOString().split('T')[0];
+      const customerId = order.customerId;
+      if (customerId && (!firstOrderDates[customerId] || new Date(firstOrderDates[customerId]) > new Date(orderDate))) {
+        firstOrderDates[customerId] = orderDate;
+      }
+    });
+
+    const newCustomerCountValues = timePeriod.map((date) => {
+      const dateStr = date.toISOString().split('T')[0];
+      let newCustomerCount = 0;
+      for (const firstOrderDate of Object.values(firstOrderDates)) {
+        if (firstOrderDate === dateStr) {
+          newCustomerCount++;
+        }
+      }
+      return newCustomerCount;
+    });
+
+    const repeatCustomerCountValues = timePeriod.map((date) => {
+      const dateStr = date.toISOString().split('T')[0];
+      let repeatCustomerCount = 0;
+      for (const [customerId, orderDates] of Object.entries(customerOrderHistory)) {
+        if (orderDates.length > 1 && orderDates.some((d) => d.toISOString().split('T')[0] === dateStr)) {
+          repeatCustomerCount++;
+        }
+      }
+      return repeatCustomerCount;
+    });
+
+    let totalAov = 0;
+    let aovNums = 0;
+    const aovValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      let numberOfOrders = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.paid;
+          numberOfOrders++;
+        }
+      });
+      if (numberOfOrders) {
+        totalAov += totalSales / numberOfOrders;
+        aovNums++;
+      }
+      return totalSales / numberOfOrders || 0;
+    });
+
+    let totalAnoi = 0;
+    let anoiNums = 0;
+    const anoiValues = timePeriod.map((date) => {
+      let numberOfItems = 0;
+      let numberOfOrders = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          numberOfItems += order.lineItems.reduce((a, i) => a + i.quantity, 0);
+          numberOfOrders++;
+        }
+      });
+      if (numberOfOrders) {
+        totalAnoi += numberOfItems / numberOfOrders;
+        anoiNums++;
+      }
+      return numberOfItems / numberOfOrders || 0;
+    });
+
+    const newCustomers = {}; // Store new customer IDs and their first order date
+    orders.forEach(order => {
+      //@ts-ignore
+      if (!newCustomers[order.customerId]) {
+        //@ts-ignore
+        newCustomers[order.customerId] = order.date;
+      }
+    });
+
+    const newCustomerSalesValues = timePeriod.map(date => {
+      let totalSales = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        //@ts-ignore
+        if (date.toISOString().split('T')[0] === orderDate && newCustomers[order.customerId] === order.date) {
+          totalSales += (order.paid - order.tax);
+        }
+      });
+      return totalSales;
+    });
+
+    const newCustomerAovValues = timePeriod.map(date => {
+      let totalSales = 0;
+      let numberOfOrders = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        //@ts-ignore
+        if (date.toISOString().split('T')[0] === orderDate && newCustomers[order.customerId] === order.date) {
+          totalSales += order.paid;
+          numberOfOrders++;
+        }
+      });
+      return totalSales / numberOfOrders || 0;
+    });
+
+    const repeatCustomers = Object.keys(customerOrderHistory).filter(customerId => customerOrderHistory[customerId].length > 1);
+
+    const repeatCustomerSalesValues = timePeriod.map(date => {
+      let totalSales = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate && repeatCustomers.includes(order.customerId)) {
+          totalSales += order.paid - order.tax;
+        }
+      });
+      return totalSales;
+    });
+
+    const repeatCustomerAovValues = timePeriod.map(date => {
+      let totalSales = 0;
+      let numberOfOrders = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate && repeatCustomers.includes(order.customerId)) {
+          totalSales += order.paid;
+          numberOfOrders++;
+        }
+      });
+      return totalSales / numberOfOrders || 0;
+    });
+
+    const newCustomerOrderCountValues = timePeriod.map((date) => {
+      const dateStr = date.toISOString().split('T')[0];
+      let newCustomerOrderCount = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        //@ts-ignore
+        if (orderDate === dateStr && newCustomers[order.customerId] === order.date) {
+          newCustomerOrderCount++;
+        }
+      });
+      return newCustomerOrderCount;
+    });
+
+    const totalCustomerValues = timePeriod.map((date) => {
+      const uniqueCustomers = new Set();
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0]
+          if (date.toISOString().split('T')[0] === orderDate) {
+              uniqueCustomers.add(order.customerId); // Add customer ID to the set
+          }
+      });
+      return uniqueCustomers.size; // Return the number of unique customers
+    });
+
+    const metricsData = [
+      {
+        name: 'Total Sales',
+        description: 'Equates to gross sales - discounts - returns + taxes + shipping charges.',
+        values: totalSalesValues,
+      },
+      {
+        name: 'Taxes',
+        description: 'The total amount of taxes charged on orders during this period.',
+        values: taxesValues,
+      },
+      {
+        name: 'Net Sales',
+        description: 'Equates to gross sales + shipping - taxes - discounts - returns.',
+        values: netSalesValues,
+      },
+      {
+        name: 'COGS',
+        description: 'Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees',
+        values: cogsValues,
+      },
+      {
+        name: 'Gross Profit',
+        description: 'Calculated by subtracting Cost of Goods (COGS) from Net Sales.',
+        values: grossProfitValues,
+      },
+      {
+        name: 'Gross Profit %',
+        description: 'Gross Profit as a % of Net Sales',
+        values: grossProfitMarginValues,
+      },
+      {
+        name: 'COGS %',
+        description: 'Cost of Goods (COGS) as % of Net Sales',
+        values: cogsMarginValues,
+      },
+      {
+        name: 'Orders',
+        description: 'Number of orders',
+        values: ordersValues,
+      },
+      {
+        name: 'New Customer Orders',
+        description: 'Number of orders from new customers',
+        values: newCustomerOrderCountValues
+      },
+      {
+        name: 'New Customers',
+        description: 'The number of first-time buyers during a specific period.',
+        values: newCustomerCountValues,
+      },
+      {
+        name: 'Repeat Customers',
+        description: 'Customers who have made more than one purchase in their order history.',
+        values: repeatCustomerCountValues,
+      },
+      {
+        name: 'New Customer Sales',
+        description: 'Net Sales generated from new customers during this time period.',
+        values: newCustomerSalesValues
+      },
+      {
+        name: "Repeat Customer Sales", 
+        description: "Net Sales generated from existing customers during this time period.",
+        values: repeatCustomerSalesValues
+      },
+      {
+        name: "New Customer AOV", 
+        description: "Average Value of Each Order from a New Customer. Total New Customer Sales / Number of New Customers.",
+        values: newCustomerAovValues
+      },
+      {
+        name: "Repeat Customer AOV", 
+        description: "Average Value of Each Order from a Repeat Customer. Total Repeat Customer Sales / Number of Repeat Customers.",
+        values: repeatCustomerAovValues
+      },
+      {
+        name: 'AOV',
+        description: 'Average Value of Each Order Total Sales / Orders',
+        values: aovValues,
+      },
+      {
+        name: 'Average No Of Items',
+        description: 'The average number of items per order. | Total Items Ordered / Total Orders.',
+        values: anoiValues,
+      },
+      {
+        name: "Total Customers", 
+        description: "The total number of unique customers who have made a purchase.",
+        values: totalCustomerValues
+      }
+    ];
+
+    for (const metric of metricsData) {
+      for (let i = 0; i < timePeriod.length; i++) {
+        if(metric.values[i]){
+          await prisma.metric.upsert({
+            where: {
+              shopId_date_metricType: {
+                shopId,
+                date: timePeriod[i],
+                metricType: metric.name,
+              },
+            },
+            update: {
+              value: metric.values[i],
+              description: metric.description,
+            },
+            create: {
+              shopId,
+              date: timePeriod[i],
+              metricType: metric.name,
+              value: metric.values[i],
+              description: metric.description,
+            },
+          });
+        }
+      }
+    }
+
+    const currentTime = new Date()
+
+    await prisma.store.update({
+      where: { id: shopId },
+      data: { lastMetricSync: currentTime },
+    });
+
+    res.status(200).json({
+      message: "metrics synced successfully"
+    });
+  } catch (e) {
+    console.error('Error exporting metric data:', e);
+    res.status(500).send('Internal Server Error');
+  }
+})
+
+router.post('/resync-metrics', async (req: Request, res: Response) => {
+  const { shopId } = req.body;
+  if (!shopId) {
+    return res.status(400).send('Missing required parameter: shopId');
+  }
+
+  try {
+
+    const store = await prisma.store.findUnique({
+      where: { id: shopId },
+    });
+
+    if (!store) {
+      return res.status(404).send('Store not found');
+    }
+
+    const { lastMetricSync } = store;
+
+    const orders = await prisma.order.findMany({
+      where: {
+        storeId: shopId,
+        date: {
+          gte: lastMetricSync,
+        },
+      },
+      include: { lineItems: true },
+    });
+
+    const endDate = new Date();
+    const timePeriod = getDatesInInterval(lastMetricSync, endDate);
+
+    const totalSalesValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.paid;
+        }
+      });
+      return totalSales;
+    });
+
+    const taxesValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.tax || 0;
+        }
+      });
+      return totalSales;
+    });
+
+    const netSalesValues = totalSalesValues.map((v, i) => v - taxesValues[i]);
+
+    const cogsValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.cogs;
+        }
+      });
+      return totalSales;
+    });
+
+    const grossProfitValues = netSalesValues.map((v, i) => v - cogsValues[i]);
+
+    const grossProfitMarginValues = grossProfitValues.map((v, i) =>
+      netSalesValues[i] ? (v / netSalesValues[i]) * 100 : 0
+    );
+
+    const cogsMarginValues = cogsValues.map((v, i) => (netSalesValues[i] ? (v / netSalesValues[i]) * 100 : 0));
+
+    const ordersValues = timePeriod.map((date) => {
+      let number = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          number++;
+        }
+      });
+      return number;
+    });
+
+    // Fetch existing customer order histories
+    const existingCustomers = await prisma.customerOrderHistory.findMany({
+      where: { shopId },
+    });
+
+    const customerOrderHistory = existingCustomers.reduce((acc, customer) => {
+      acc[customer.customerId] = customer.orderDates;
+      return acc;
+    }, {} as { [key: string]: Date[] });
+
+    // Update customer order histories
+    for (const order of orders) {
+      const { customerId, date } = order;
+      if (customerId) {
+        if (!customerOrderHistory[customerId]) {
+          customerOrderHistory[customerId] = [];
+        }
+        customerOrderHistory[customerId].push(date);
+      }
+    }
+
+    // Save updated customer order histories
+    for (const [customerId, orderDates] of Object.entries(customerOrderHistory)) {
+      await prisma.customerOrderHistory.upsert({
+        where: {
+          customerId_shopId: { customerId, shopId },
+        },
+        update: {
+          orderDates,
+        },
+        create: {
+          customerId,
+          shopId,
+          orderDates,
+        },
+      });
+    }
+
+    const firstOrderDates: any = {};
+    orders.forEach((order) => {
+      const orderDate = order.date.toISOString().split('T')[0];
+      const customerId = order.customerId;
+      if (customerId && (!firstOrderDates[customerId] || new Date(firstOrderDates[customerId]) > new Date(orderDate))) {
+        firstOrderDates[customerId] = orderDate;
+      }
+    });
+
+    const newCustomerCountValues = timePeriod.map((date) => {
+      const dateStr = date.toISOString().split('T')[0];
+      let newCustomerCount = 0;
+      for (const firstOrderDate of Object.values(firstOrderDates)) {
+        if (firstOrderDate === dateStr) {
+          newCustomerCount++;
+        }
+      }
+      return newCustomerCount;
+    });
+
+    const repeatCustomerCountValues = timePeriod.map((date) => {
+      const dateStr = date.toISOString().split('T')[0];
+      let repeatCustomerCount = 0;
+      for (const [customerId, orderDates] of Object.entries(customerOrderHistory)) {
+        if (orderDates.length > 1 && orderDates.some((d) => d.toISOString().split('T')[0] === dateStr)) {
+          repeatCustomerCount++;
+        }
+      }
+      return repeatCustomerCount;
+    });
+
+    let totalAov = 0;
+    let aovNums = 0;
+    const aovValues = timePeriod.map((date) => {
+      let totalSales = 0;
+      let numberOfOrders = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          totalSales += order.paid;
+          numberOfOrders++;
+        }
+      });
+      if (numberOfOrders) {
+        totalAov += totalSales / numberOfOrders;
+        aovNums++;
+      }
+      return totalSales / numberOfOrders || 0;
+    });
+
+    let totalAnoi = 0;
+    let anoiNums = 0;
+    const anoiValues = timePeriod.map((date) => {
+      let numberOfItems = 0;
+      let numberOfOrders = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate) {
+          numberOfItems += order.lineItems.reduce((a, i) => a + i.quantity, 0);
+          numberOfOrders++;
+        }
+      });
+      if (numberOfOrders) {
+        totalAnoi += numberOfItems / numberOfOrders;
+        anoiNums++;
+      }
+      return numberOfItems / numberOfOrders || 0;
+    });
+
+    const newCustomers = {}; // Store new customer IDs and their first order date
+    orders.forEach(order => {
+      //@ts-ignore
+      if (!newCustomers[order.customerId]) {
+        //@ts-ignore
+        newCustomers[order.customerId] = order.date;
+      }
+    });
+
+    const newCustomerSalesValues = timePeriod.map(date => {
+      let totalSales = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        //@ts-ignore
+        if (date.toISOString().split('T')[0] === orderDate && newCustomers[order.customerId] === order.date) {
+          totalSales += (order.paid - order.tax);
+        }
+      });
+      return totalSales;
+    });
+
+    const newCustomerAovValues = timePeriod.map(date => {
+      let totalSales = 0;
+      let numberOfOrders = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        //@ts-ignore
+        if (date.toISOString().split('T')[0] === orderDate && newCustomers[order.customerId] === order.date) {
+          totalSales += order.paid;
+          numberOfOrders++;
+        }
+      });
+      return totalSales / numberOfOrders || 0;
+    });
+
+    const repeatCustomers = Object.keys(customerOrderHistory).filter(customerId => customerOrderHistory[customerId].length > 1);
+
+    const repeatCustomerSalesValues = timePeriod.map(date => {
+      let totalSales = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate && repeatCustomers.includes(order.customerId)) {
+          totalSales += order.paid - order.tax;
+        }
+      });
+      return totalSales;
+    });
+
+    const repeatCustomerAovValues = timePeriod.map(date => {
+      let totalSales = 0;
+      let numberOfOrders = 0;
+      orders.forEach(order => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        if (date.toISOString().split('T')[0] === orderDate && repeatCustomers.includes(order.customerId)) {
+          totalSales += order.paid;
+          numberOfOrders++;
+        }
+      });
+      return totalSales / numberOfOrders || 0;
+    });
+
+    const newCustomerOrderCountValues = timePeriod.map((date) => {
+      const dateStr = date.toISOString().split('T')[0];
+      let newCustomerOrderCount = 0;
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0];
+        //@ts-ignore
+        if (orderDate === dateStr && newCustomers[order.customerId] === order.date) {
+          newCustomerOrderCount++;
+        }
+      });
+      return newCustomerOrderCount;
+    });
+
+    const totalCustomerValues = timePeriod.map((date) => {
+      const uniqueCustomers = new Set();
+      orders.forEach((order) => {
+        const orderDate = order.date.toISOString().split('T')[0]
+          if (date.toISOString().split('T')[0] === orderDate) {
+              uniqueCustomers.add(order.customerId); // Add customer ID to the set
+          }
+      });
+      return uniqueCustomers.size; // Return the number of unique customers
+    });
+
+    const metricsData = [
+      {
+        name: 'Total Sales',
+        description: 'Equates to gross sales - discounts - returns + taxes + shipping charges.',
+        values: totalSalesValues,
+      },
+      {
+        name: 'Taxes',
+        description: 'The total amount of taxes charged on orders during this period.',
+        values: taxesValues,
+      },
+      {
+        name: 'Net Sales',
+        description: 'Equates to gross sales + shipping - taxes - discounts - returns.',
+        values: netSalesValues,
+      },
+      {
+        name: 'COGS',
+        description: 'Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees',
+        values: cogsValues,
+      },
+      {
+        name: 'Gross Profit',
+        description: 'Calculated by subtracting Cost of Goods (COGS) from Net Sales.',
+        values: grossProfitValues,
+      },
+      {
+        name: 'Gross Profit %',
+        description: 'Gross Profit as a % of Net Sales',
+        values: grossProfitMarginValues,
+      },
+      {
+        name: 'COGS %',
+        description: 'Cost of Goods (COGS) as % of Net Sales',
+        values: cogsMarginValues,
+      },
+      {
+        name: 'Orders',
+        description: 'Number of orders',
+        values: ordersValues,
+      },
+      {
+        name: 'New Customer Orders',
+        description: 'Number of orders from new customers',
+        values: newCustomerOrderCountValues
+      },
+      {
+        name: 'New Customers',
+        description: 'The number of first-time buyers during a specific period.',
+        values: newCustomerCountValues,
+      },
+      {
+        name: 'Repeat Customers',
+        description: 'Customers who have made more than one purchase in their order history.',
+        values: repeatCustomerCountValues,
+      },
+      {
+        name: 'New Customer Sales',
+        description: 'Net Sales generated from new customers during this time period.',
+        values: newCustomerSalesValues
+      },
+      {
+        name: "Repeat Customer Sales", 
+        description: "Net Sales generated from existing customers during this time period.",
+        values: repeatCustomerSalesValues
+      },
+      {
+        name: "New Customer AOV", 
+        description: "Average Value of Each Order from a New Customer. Total New Customer Sales / Number of New Customers.",
+        values: newCustomerAovValues
+      },
+      {
+        name: "Repeat Customer AOV", 
+        description: "Average Value of Each Order from a Repeat Customer. Total Repeat Customer Sales / Number of Repeat Customers.",
+        values: repeatCustomerAovValues
+      },
+      {
+        name: 'AOV',
+        description: 'Average Value of Each Order Total Sales / Orders',
+        values: aovValues,
+      },
+      {
+        name: 'Average No Of Items',
+        description: 'The average number of items per order. | Total Items Ordered / Total Orders.',
+        values: anoiValues,
+      },
+      {
+        name: "Total Customers", 
+        description: "The total number of unique customers who have made a purchase.",
+        values: totalCustomerValues
+      }
+    ];
+
+    for (const metric of metricsData) {
+      for (let i = 0; i < timePeriod.length; i++) {
+        if(metric.values[i]){
+          await prisma.metric.upsert({
+            where: {
+              shopId_date_metricType: {
+                shopId,
+                date: timePeriod[i],
+                metricType: metric.name,
+              },
+            },
+            update: {
+              value: metric.values[i],
+              description: metric.description,
+            },
+            create: {
+              shopId,
+              date: timePeriod[i],
+              metricType: metric.name,
+              value: metric.values[i],
+              description: metric.description,
+            },
+          });
+        }
+      }
+    }
+
+    const currentTime = new Date()
+
+    await prisma.store.update({
+      where: { id: shopId },
+      data: { lastMetricSync: currentTime },
+    });
+
+    res.status(200).json({
+      message: "metrics resynced successfully",
+      syncTime: currentTime
+    });
+  } catch (e) {
+    console.error('Error exporting metric data:', e);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+
+router.post('/fetch-metrics', async (req: Request, res: Response) => {
+  const { shopId, startDate, endDate } = req.body;
+
+  if (!shopId || !startDate || !endDate) {
+    return res.status(400).send('Missing required parameters: shopId, startDate, or endDate');
+  }
+
+  try {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    const metrics = await prisma.metric.findMany({
+      where: {
+        shopId,
+        date: {
+          gte: start,
+          lte: end,
+        },
+      },
+      orderBy: {
+        date: 'asc',
+      },
+    });
+
+    const labels: string[] = eachDayOfInterval({ start, end }).map(date => format(date, 'd MMM'));
+    const metricsData: { [key: string]: any } = {};
+
+    let gpCount = 0;
+    let cogsCount = 0;
+    let totalOrders = 0;
+    let totalAOVSum = 0;
+    let totalNewAOVSum = 0;
+    let totalRepeatAOVSum = 0;
+    let totalANOISum = 0;
+    let totalNewCustomerOrders = 0;
+
+    // Initialize metricsData with arrays of zeros for the time period
+    // const metricTypes = [
+    //   "Total Sales", "Taxes", "Net Sales", "COGS", "Gross Profit",
+    //   "Gross Profit %", "COGS %", "Orders", "New Customers", "Repeat Customers",
+    //   "AOV", "Average No Of Items"
+    // ];
+
+    const metricTypes = [
+      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: "₹", suffix: ""},
+      {name: "Taxes", description: "The total amount of taxes charged on orders during this period.", prefix: "₹", suffix: ""},
+      {name: "Net Sales", description: "Equates to gross sales + shipping - taxes - discounts - returns.", prefix: "₹", suffix: ""},
+      // {name: "Returns", description: "The value of goods returned by a customer."},
+      {name: "COGS", description: "Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees", prefix: "₹", suffix: ""},
+      {name: "COGS %", description: "Cost of Goods (COGS) as % of Net Sales", prefix: "", suffix: "%"},
+      // {name: "Shipping Paid", description: "Shipping paid by customers as part of orders during this period."},
+      // {name: "Shipping Cost", description: "The shipping cost paid by you to shipping providers. This amount is set under"},
+      // {name: "Transaction Fees", description: "Card processing fees paid by customers as part of the order process. Includes FX fees charged by your payment processor for International Cards. Update under"},
+      // {name: "Fulfillment Costs", description: "Cost of Fulfillment Pick & Pack Fees"},
+      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) from Net Sales.", prefix: "₹", suffix: ""},
+      {name: "Gross Profit %", description: "Gross Profit as a % of Net Sales", prefix: "", suffix: "%"},
+      // {name: "Contribution Margin", description: "Net sales - COGS - Marketing Costs = Contribution Margin"},
+      // {name: "Contribution Margin %", description: "Contribution Margin as a % of Net Sales"},
+      // {name: "New Customer Contribution Margin", description: "The contribution margin (gross profit after marketing costs) you've earned from new customers. Keeping this above 0 means you are first order profitable. New Customer Net Sales - New Customer COGS - Total Marketing Spend"},
+      // {name: "Operational Expenses", description: "Costs related to the operation of the business that aren’t directly tied to producing goods or services (e.g., rent, utilities, salaries). Add under Other Costs"},
+      // {name: "Operational Expenses %", description: "Operating Expenses as % of Net Sales"},
+      // {name: "Net Profit", description: "Net Sales - COGS - Marketing Costs - Operating Expenses = Net Profit"},
+      // {name: "Net Profit %", description: "Net Profit as a % of Net Sales"},
+      // {name: "Staff Cost %", description: "The cost of Staff inputted under the Staff Settings tab as a % of Net Sales"},
+      {name: "Orders", description: "Number of orders", prefix: "", suffix: ""},
+      {name: 'New Customer Orders', description: 'Number of orders from new customers', prefix: "", suffix: ""},
+      // {name: "Total Ad Spend", description: "The total cost of paid advertising across connected channels during this period."},
+      // {name: "Marketing %", description: "Marketing Costs (Ad Spend and Marketing Categorised Expenses) as a % of net sales. (Ad Spend+Marketing Expenses)/Net Sales"},
+      // {name: "Total Sales MER", description: "Marketing Efficiency Ratio | Total return on your total marketing spend. | Net Sales / Marketing Spend"},
+      // {name: "MER", description: "Marketing Efficiency Ratio | Total return on your total marketing spend. | Net Sales / Marketing Spend"},
+      // {name: "BEP MER", description: "Breakeven Ratio of Marketing Spend | The minimum return on your marketing spend needed to break even. | Net Sales - COGS - Operating Expenses = Breakeven Marketing Spend | Gross Profit / Breakeven Marketing Spend = BEP MER"},
+      // {name: "BEP ROAS", description: "The minimum ROAS (Return on Ad Spend) needed to cover your cost of goods. Net Sales / ( Net Sales – Total cost of goods) = Breakeven ROAS"},
+      // {name: "Cost Per Acquisition", description: "The total cost to Acquire a New Customer. Ad Spend + Marketing Spend / Number of New Customers."},
+      // {name: "New Customer Acquisition Cost", description: "Cost to Acquire a New Customer. Ad Spend + Marketing Spend / Number of New Customers."},
+      // {name: "Acquisition MER", description: "Ratio of new customer revenue to ad spend. This metrics tells us how efficiently you're turning ad spend into revenue from new customers. Total New Customer Revenue / Total Ad Spend"},
+      {name: "New Customers", description: "The number of first-time buyers during a specific period.", prefix: "", suffix: ""},
+      {name: "Repeat Customers", description: "Customers who have made more than one purchase in their order history.", prefix: "", suffix: ""},
+      {name: "New Customer Sales", description: "Net Sales generated from new customers during this time period.", prefix: "₹", suffix: ""},
+      {name: "Repeat Customer Sales", description: "Net Sales generated from existing customers during this time period.", prefix: "₹", suffix: ""},
+      // {name: "Gross Profit Per New Customer", description: "New Customer Net Sales - New Customer COGS."},
+      // {name: "Gross Profit Per Repeat Customer", description: "Repeat Customer Net Sales - Repeat Customer COGS."},
+      {name: "New Customer AOV", description: "Average Value of Each Order from a New Customer. Total New Customer Sales / Number of New Customers.", prefix: "₹", suffix: ""},
+      {name: "Repeat Customer AOV", description: "Average Value of Each Order from a Repeat Customer. Total Repeat Customer Sales / Number of Repeat Customers.", prefix: "₹", suffix: ""},
+      {name: "AOV", description: "Average Value of Each Order Total Sales / Orders", prefix: "₹", suffix: ""},
+      {name: "Average No Of Items", description: "The average number of items per order. | Total Items Ordered / Total Orders.", prefix: "", suffix: ""},
+      {name: "Total Customers", description: "The total number of unique customers who have made a purchase.", prefix: "", suffix: ""}
+    ];
+
+    metricTypes.forEach(metricType => {
+      metricsData[metricType.name] = {
+        name: metricType.name,
+        description: metricType.description,
+        prefix: metricType.prefix,
+        suffix: metricType.suffix,
+        values: new Array(labels.length).fill(0),
+        total: 0,
+      };
+    });
+
+    metrics.forEach((metric) => {
+    
+      const dateStr = format(new Date(metric.date.toISOString().split('T')[0]), 'd MMM');
+      const dateIndex = labels.indexOf(dateStr);
+
+      console.log(metric.date, dateStr, dateIndex)
+
+      if (!metricsData[metric.metricType]) {
+        console.error(`Unexpected metricType: ${metric.metricType}`);
+        return;
+      }
+
+      metricsData[metric.metricType].values[dateIndex] = metric.value;
+
+      if (metric.metricType === "Gross Profit %") {
+        if (metric.value) {
+          metricsData[metric.metricType].total += metric.value;
+          gpCount++;
+        }
+      } else if (metric.metricType === "COGS %") {
+        if (metric.value) {
+          metricsData[metric.metricType].total += metric.value;
+          cogsCount++;
+        }
+      } else if (metric.metricType === "AOV") {
+        if (metric.value) {
+          totalAOVSum += metric.value * metricsData["Orders"].values[dateIndex];
+        }
+      } else if (metric.metricType === "New Customer AOV") {
+        if (metric.value) {
+          totalNewAOVSum += metric.value * metricsData["New Customer Orders"].values[dateIndex];
+        }
+      } else if (metric.metricType === "Repeat Customer AOV") {
+        if (metric.value) {
+          totalRepeatAOVSum += metric.value * (metricsData["Orders"].values[dateIndex] - metricsData["New Customer Orders"].values[dateIndex]);
+        }
+      } else if (metric.metricType === "Average No Of Items") {
+        if (metric.value) {
+          totalANOISum += metric.value * metricsData["Orders"].values[dateIndex];
+        }
+      } else if (metric.metricType === "Orders") {
+        totalOrders += metric.value;
+        metricsData[metric.metricType].total += metric.value;
+      } else if (metric.metricType === "New Customer Orders") {
+        totalNewCustomerOrders += metric.value;
+        metricsData[metric.metricType].total += metric.value;
+      } else {
+        metricsData[metric.metricType].total += metric.value;
+      }
+    });
+
+    if (gpCount > 0) {
+      metricsData["Gross Profit %"].total /= gpCount;
+    }
+    if (cogsCount > 0) {
+      metricsData["COGS %"].total /= cogsCount;
+    }
+    if (totalOrders > 0) {
+      metricsData["AOV"].total = totalAOVSum / totalOrders;
+      metricsData["Average No Of Items"].total = totalANOISum / totalOrders;
+      metricsData["Repeat Customer AOV"].total = totalRepeatAOVSum / (totalOrders - totalNewCustomerOrders);
+    }
+    if (totalNewCustomerOrders > 0) {
+      metricsData["New Customer AOV"].total = totalNewAOVSum / totalNewCustomerOrders
+    }
+
+    const response = Object.values(metricsData).map((metric: any) => {
+      metric.total = metric.total.toFixed(2);
+      metric.values = metric.values.map((v: any) => parseFloat(v.toFixed(2)))
+      return metric;
+    });
+
+    res.status(200).json({ metrics: response, labels });
+  } catch (e) {
+    console.error('Error fetching metric data:', e);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+
+router.post('/spotlight', async (req: Request, res: Response) => {
+  const { shopId, startDate, endDate } = req.body;
+
+  if (!shopId || !startDate || !endDate) {
+    return res.status(400).send('Missing required parameters: shopId, startDate, or endDate');
+  }
+
+  try {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    const orders = await prisma.order.findMany({
+      where: {
+        storeId: shopId,
+        date: {
+          gte: start,
+          lte: end,
+        },
+      },
+      include: {
+        lineItems: true,
+      },
+    });
+
+    let biggestMover = { name: "", amount: 0 };
+    let bestSeller = { name: "", quantity: 0 };
+    let topCustomer = { name: "", amount: 0 };
+
+    if (!orders.length) {
+      return res.status(200).json({
+        biggestMover,
+        bestSeller,
+        topCustomer,
+      })
+    }
+
+    // Calculate biggestMover, bestSeller, and topCustomer
+    const productSales = new Map<string, { amount: number; quantity: number }>();
+    const customerSpending = new Map<string, number>();
+
+    orders.forEach((order) => {
+      // Calculate topCustomer
+      if (order.customer) {
+        customerSpending.set(order.customer, (customerSpending.get(order.customer) || 0) + order.paid);
+      }
+
+      // Calculate biggestMover and bestSeller
+      order.lineItems.forEach((item) => {
+        const productStats = productSales.get(item.productId) || { amount: 0, quantity: 0 };
+        productStats.amount += item.paid;
+        productStats.quantity += item.quantity;
+        productSales.set(item.productId, productStats);
+      });
+    });
+
+    console.log(orders)
+
+    // Determine biggestMover, bestSeller, and topCustomer
+
+    productSales.forEach((stats, productId) => {
+      if (stats.amount > biggestMover.amount) {
+        biggestMover = { name: productId, amount: stats.amount };
+      }
+      if (stats.quantity > bestSeller.quantity) {
+        bestSeller = { name: productId, quantity: stats.quantity };
+      }
+    });
+
+    biggestMover.name = (await prisma.product.findUnique({
+      where: {
+        storeId: shopId,
+        productId: biggestMover.name
+      }
+    }))?.title || ""
+
+    bestSeller.name = (await prisma.product.findUnique({
+      where: {
+        storeId: shopId,
+        productId: bestSeller.name
+      }
+    }))?.title || ""
+
+    customerSpending.forEach((amount, customer) => {
+      if (amount > topCustomer.amount) {
+        topCustomer = { name: customer, amount };
+      }
+    });
+
+    res.json({
+      biggestMover,
+      bestSeller,
+      topCustomer,
+    });
+  } catch (e) {
+    console.error('Error fetching spotlight data:', e);
+    res.status(500).send('Internal Server Error');
+  }
+});
+
+
+router.post('/old-metrics', async(req: Request, res: Response) => {
   const { shopId } = req.body;
   if (!shopId) {
     return res.status(400).send('Missing required parameter: shopId');

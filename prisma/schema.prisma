@@ -25,28 +25,48 @@ model User {
 }
 
 model Store {
-  id          String @id @default(auto()) @map("_id") @db.ObjectId
+  id          String       @id @default(auto()) @map("_id") @db.ObjectId
   name        String
   shopifyName String
   accessToken String
-  lastOrderSync  DateTime @default(now())
+  lastOrderSync   DateTime @default(now())
   lastProductSync DateTime @default(now())
-  userId      String @db.ObjectId
-  user        User @relation(fields: [userId], references: [id])
+  lastMetricSync  DateTime @default(now())
+  userId      String       @db.ObjectId
+  user        User         @relation(fields: [userId], references: [id])
   orders      Order[]
   products    Product[]
+  metrics     Metric[]
+  customerOrderHistory CustomerOrderHistory[]
 }
+
+model CustomerOrderHistory {
+  id          String    @id @default(auto()) @map("_id") @db.ObjectId
+  customerId  String
+  shopId      String    @db.ObjectId    
+  store       Store     @relation(fields: [shopId], references: [id])
+  orderDates  DateTime[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@unique([customerId, shopId])
+}
+
 
 model Order {
   id               String     @id @default(auto()) @map("_id") @db.ObjectId
   date             DateTime
   orderId          String
+  source           String
   customer         String
-  customerId       String?
+  customerId       String
   fulfillmentStatus String
   paid             Float
   tax              Float
   shippingCost     Float
+  shippingPaid     Float
+  shippingRegion   String
+  shippingCountry  String
   discount         Float
   grossProfit      Float
   cogs             Float
@@ -88,6 +108,17 @@ model Variant {
   inventoryQuantity Int
   productId         String   @db.ObjectId
   product           Product  @relation(fields: [productId], references: [id])
+}
+
+model Metric {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  shopId       String   @db.ObjectId
+  date         DateTime 
+  metricType   String
+  value        Float
+  description  String
+  store        Store    @relation(fields: [shopId], references: [id])
+  @@unique([shopId, date, metricType])
 }
 
 
