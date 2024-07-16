@@ -67,7 +67,7 @@ interface Store {
   accessToken: string;
 }
 
-const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTime: Date): Promise<void> => {
+export const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTime: Date): Promise<void> => {
   let params: any = { 
     limit: 250,
     created_at_max: currentTime.toISOString(),
@@ -733,7 +733,7 @@ router.post('/fetch-products', async (req: Request, res: Response) => {
 
 
 
-const getDatesInInterval = (startDate: Date, endDate: Date) => {
+export const getDatesInInterval = (startDate: Date, endDate: Date) => {
   return eachDayOfInterval({ start: startDate, end: endDate });
 }
 
