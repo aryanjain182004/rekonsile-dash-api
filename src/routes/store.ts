@@ -1754,7 +1754,7 @@ router.post('/fetch-finance-metrics', async (req: Request, res: Response) => {
 
     console.log(metrics)
 
-    const labels: string[] = eachDayOfInterval({ start, end }).map(date => format(date, 'd MMM'));
+    const labels: string[] = eachDayOfInterval({ start, end }).map(date => format(date, 'MM-dd-yyyy'));
     const metricsData: { [key: string]: any } = {};
 
     let gpCount = 0;
@@ -1779,7 +1779,7 @@ router.post('/fetch-finance-metrics', async (req: Request, res: Response) => {
 
     metrics.forEach((metric) => {
 
-      const dateStr = format(new Date(metric.date.toISOString().split('T')[0]), 'd MMM');
+      const dateStr = format(new Date(metric.date.toISOString().split('T')[0]), 'MM-dd-yyyy');
       const dateIndex = labels.indexOf(dateStr);
 
       console.log(metric.date, dateStr, dateIndex)
