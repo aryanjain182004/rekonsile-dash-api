@@ -34,6 +34,31 @@ router.post('/create', authMiddleware , async(req: any, res: Response) => {
     }
 })
 
+router.post('/update-access-token', authMiddleware, async(req: any,res: Response) => {
+  const { shopifyName, accessToken, storeId} = req.body
+
+  try {
+    await prisma.store.update({
+      data: {
+        accessToken,
+        shopifyName
+      },
+      where: {
+        id: storeId
+      }
+    })
+
+    res.status(201).json({
+      message: `store access token updated successfully`,
+    })
+  } catch(e) {
+    console.error(e)
+    res.status(500).json({
+      error: "Failed to update store access token"
+    })
+  }
+})
+
 router.get('/', authMiddleware, async(req: any, res: Response) => {
     const userId = req.user.userId
     

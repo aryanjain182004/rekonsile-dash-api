@@ -11,8 +11,8 @@ const prisma = new PrismaClient()
 router.get('/', (req:Request, res:Response) => {
     const { shop, storeId } = req.query;
     if (shop) {
-      const state = Buffer.from(JSON.stringify({ storeId })).toString('base64');
-      const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SHOPIFY_SCOPES}&redirect_uri=${CALLBACK_URL}/auth/callback&state=${state}`;
+      const state = Buffer.from(JSON.stringify({ storeId, shopifyName:shop })).toString('base64');
+      const installUrl = `https://${shop}/admin/oauth/authorize?client_id=${SHOPIFY_API_KEY}&scope=${SHOPIFY_SCOPES}&redirect_uri=${CALLBACK_URL}&state=${state}`;
       res.status(200).json({
         url: installUrl
       });
@@ -26,7 +26,7 @@ router.get('/callback', async (req: Request, res: Response) => {
 
     if (shop && hmac && code && state) {
       //@ts-ignore
-      const { storeId } = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
+      const { storeId, shopifyName } = JSON.parse(Buffer.from(state, 'base64').toString('utf-8'));
       try {
         const accessTokenResponse = await axios.post(`https://${shop}/admin/oauth/access_token`, {
           client_id: SHOPIFY_API_KEY,
@@ -39,6 +39,7 @@ router.get('/callback', async (req: Request, res: Response) => {
         await prisma.store.update({
             data: {
                 accessToken,
+                shopifyName
             },
             where: {
                 id: storeId
