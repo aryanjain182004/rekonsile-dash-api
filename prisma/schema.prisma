@@ -29,9 +29,8 @@ model Store {
   name        String
   shopifyName String
   accessToken String
-  lastOrderSync   DateTime @default(now())
-  lastProductSync DateTime @default(now())
-  lastMetricSync  DateTime @default(now())
+  lastSync   DateTime @default(now())
+  syncing     Boolean      @default(false)
   userId      String       @db.ObjectId
   user        User         @relation(fields: [userId], references: [id])
   orders      Order[]

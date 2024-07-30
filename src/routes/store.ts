@@ -5,6 +5,7 @@ import { PrismaClient } from '@prisma/client';
 import Shopify, { IOrder as ShopifyOrder } from 'shopify-api-node';
 import { eachDayOfInterval, format, subYears } from 'date-fns';
 import { getDatesInMonth } from '../utils/date';
+import { resyncStoreData, syncStoreData } from '../controllers/syncController';
 
 const router = Router();
 const prisma = new PrismaClient();
@@ -61,7 +62,7 @@ router.post('/update-access-token', authMiddleware, async(req: any,res: Response
 
 router.get('/', authMiddleware, async(req: any, res: Response) => {
     const userId = req.user.userId
-    
+
     try {
         const stores = await prisma.store.findMany({
             where: {
@@ -70,17 +71,126 @@ router.get('/', authMiddleware, async(req: any, res: Response) => {
             select: {
                 id: true,
                 name: true,
-                lastMetricSync: true,
+                accessToken: true,
+                shopifyName: true,
+                lastSync: true,
+                syncing: true,
             }
         })
+
+        const resStores = stores.map( s => {
+          let synced;
+          if( (s.shopifyName === "" || s.accessToken === "") || (!s.shopifyName || !s.accessToken )) {
+            synced = false
+          } else {
+            synced = true
+          }
+          const { accessToken, shopifyName , ...newStore} = s
+          return {...newStore, synced}
+        })
         res.status(200).json({
-            stores
+            stores: resStores
         })
     } catch(e) {
+        console.error(e)
         res.status(500).json({
             error: "Failed to fetch stores"
         })
     }
+})
+
+router.post('/synced-check', authMiddleware, async(req: any, res: Response) => {
+  const {storeId} = req.body;
+
+  try {
+    const store = await prisma.store.findUnique({
+        where: {
+            id: storeId,
+        },
+        select: {
+          shopifyName: true,
+          accessToken: true,
+        }
+    })
+
+    //@ts-ignore
+    const {shopifyName, accessToken} = store
+    let synced;
+
+    if(shopifyName === "" || accessToken == "") {
+      synced = false
+    } else {
+      synced = true
+    }
+    
+    res.status(200).json({
+      synced,
+    })
+
+  } catch(e) {
+    console.error(e)
+    res.status(500).json({
+      error: "Failed to check store sync data"
+    })
+  }
+}) 
+
+router.post('/sync-store', authMiddleware, async(req: any, res: Response) => {
+  const {storeId} = req.body;
+
+  try {
+
+    await prisma.store.update({
+      data: {
+        syncing: true
+      },
+      where: {
+        id: storeId
+      }
+    })
+
+    syncStoreData(storeId, prisma)
+
+    res.status(200).json({
+      message: "store data is syncing"
+    })
+
+  } catch(e) {
+    console.error(e)
+    res.status(500).json({
+      error: "Failed to sync store data"
+    })
+  }
+})
+
+router.post('/resync-store', authMiddleware, async(req: any, res: Response) => {
+  const {storeId} = req.body;
+
+  try {
+    const currentTime = new Date()
+
+    await prisma.store.update({
+      data: {
+        syncing: true
+      },
+      where: {
+        id: storeId
+      }
+    })
+
+    resyncStoreData(storeId, prisma, currentTime)
+
+    res.status(200).json({
+      message: "store data is syncing",
+      syncTime: currentTime
+    })
+
+  } catch(e) {
+    console.error(e)
+    res.status(500).json({
+      error: "Failed to sync store data"
+    })
+  }
 })
 
 interface SyncOrdersRequest {
@@ -93,7 +203,7 @@ interface Store {
 }
 
 export const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTime: Date): Promise<void> => {
-  let params: any = { 
+  let params: any = {
     limit: 250,
     created_at_max: currentTime.toISOString(),
   };
@@ -199,7 +309,7 @@ router.post('/sync-orders', async (req: Request, res: Response) => {
 
     await prisma.store.update({
       where: { id: shopId },
-      data: { lastOrderSync: currentTime },
+      data: { lastSync: currentTime },
     });
 
     res.status(200).send('Orders and LineItems have been synced successfully.');
@@ -227,7 +337,7 @@ router.post('/resync-orders', async (req: Request, res: Response) => {
       return res.status(404).send('Store not found');
     }
 
-    const { shopifyName: shopName, accessToken, lastOrderSync } = store;
+    const { shopifyName: shopName, accessToken, lastSync } = store;
     const shopify = new Shopify({
       shopName: shopName,
       accessToken: accessToken,
@@ -239,7 +349,7 @@ router.post('/resync-orders', async (req: Request, res: Response) => {
     let hasMoreOrders = true;
     let params: any = {
       limit: 250,
-      created_at_min: lastOrderSync.toISOString(),
+      created_at_min: lastSync.toISOString(),
       created_at_max: currentTime.toISOString(),
     };
 
@@ -303,10 +413,10 @@ router.post('/resync-orders', async (req: Request, res: Response) => {
       }
     }
 
-    // Update lastOrderSync time in the database to current time
+    // Update lastSync time in the database to current time
     await prisma.store.update({
       where: { id: shopId },
-      data: { lastOrderSync: currentTime },
+      data: { lastSync: currentTime },
     });
 
     res.status(200).send('Orders synchronized successfully');
@@ -346,7 +456,7 @@ router.post('/sync-products', async (req: Request, res: Response) => {
     let hasMoreProducts = true;
     let params: any = { 
       limit: 250,
-      updated_at_max: currentTime.toISOString()
+      updated_at_max: store.lastSync.toISOString()
     };
 
     while (hasMoreProducts) {
@@ -396,11 +506,6 @@ router.post('/sync-products', async (req: Request, res: Response) => {
       }
     }
 
-    await prisma.store.update({
-      where: { id: shopId },
-      data: { lastProductSync: currentTime },
-    });
-
     res.status(200).send('Products synchronized successfully');
   } catch (error) {
     console.error('Error syncing products:', error);
@@ -425,7 +530,7 @@ router.post('/resync-products', async (req: Request, res: Response) => {
       return res.status(404).send('Store not found');
     }
 
-    const { shopifyName: shopName, accessToken, lastProductSync } = store;
+    const { shopifyName: shopName, accessToken, lastSync } = store;
     const shopify = new Shopify({
       shopName: shopName,
       accessToken: accessToken,
@@ -437,7 +542,7 @@ router.post('/resync-products', async (req: Request, res: Response) => {
     let hasMoreProducts = true;
     let params: any = {
       limit: 250,
-      updated_at_min: lastProductSync.toISOString(),
+      updated_at_min: lastSync.toISOString(),
       updated_at_max: currentTime.toISOString(),
     };
 
@@ -485,12 +590,6 @@ router.post('/resync-products', async (req: Request, res: Response) => {
         }
       }
     }
-
-    // Update lastProductSync time in the database to current time
-    await prisma.store.update({
-      where: { id: shopId },
-      data: { lastProductSync: currentTime },
-    });
 
     res.status(200).send('Products synchronized successfully');
   } catch (error) {
@@ -1144,13 +1243,6 @@ router.post('/sync-metrics', async (req: Request, res: Response) => {
       }
     }
 
-    const currentTime = new Date()
-
-    await prisma.store.update({
-      where: { id: shopId },
-      data: { lastMetricSync: currentTime },
-    });
-
     res.status(200).json({
       message: "metrics synced successfully"
     });
@@ -1176,20 +1268,20 @@ router.post('/resync-metrics', async (req: Request, res: Response) => {
       return res.status(404).send('Store not found');
     }
 
-    const { lastMetricSync } = store;
+    const { lastSync } = store;
 
     const orders = await prisma.order.findMany({
       where: {
         storeId: shopId,
         date: {
-          gte: lastMetricSync,
+          gte: lastSync,
         },
       },
       include: { lineItems: true },
     });
 
     const endDate = new Date();
-    const timePeriod = getDatesInInterval(lastMetricSync, endDate);
+    const timePeriod = getDatesInInterval(lastSync, endDate);
 
     const totalSalesValues = timePeriod.map((date) => {
       let totalSales = 0;
@@ -1557,16 +1649,9 @@ router.post('/resync-metrics', async (req: Request, res: Response) => {
       }
     }
 
-    const currentTime = new Date()
-
-    await prisma.store.update({
-      where: { id: shopId },
-      data: { lastMetricSync: currentTime },
-    });
-
     res.status(200).json({
       message: "metrics resynced successfully",
-      syncTime: currentTime
+      syncTime: new Date()
     });
   } catch (e) {
     console.error('Error exporting metric data:', e);

@@ -39,16 +39,17 @@ router.get('/callback', async (req: Request, res: Response) => {
         await prisma.store.update({
             data: {
                 accessToken,
-                shopifyName
+                shopifyName,
+                syncing: true,
             },
             where: {
                 id: storeId
             }
         })
         
-        await syncStoreData(storeId, prisma)
+        syncStoreData(storeId, prisma)
         // Redirect the user to the Next.js frontend
-        res.redirect(`${FRONTEND_URL}/dashboard`);
+        res.redirect(`${FRONTEND_URL}/dashboard/store`);
       } catch (error) {
         console.error(error);
         res.status(500).send('Something went wrong while requesting the access token');
