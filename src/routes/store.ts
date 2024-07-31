@@ -21,6 +21,9 @@ router.post('/create', authMiddleware , async(req: any, res: Response) => {
                 shopifyName,
                 accessToken,
                 userId,
+                currency: "₹ INR",
+                storeUrl: "http://yourstore.com/",
+                industry: "Other",
             }
         })
 
@@ -60,6 +63,32 @@ router.post('/update-access-token', authMiddleware, async(req: any,res: Response
   }
 })
 
+router.post('/update-general', authMiddleware, async(req: any,res: Response) => {
+  const { name, storeUrl, industry, storeId} = req.body
+
+  try {
+    await prisma.store.update({
+      data: {
+        name,
+        storeUrl,
+        industry,
+      },
+      where: {
+        id: storeId
+      }
+    })
+
+    res.status(201).json({
+      message: `general settings updated successfully`,
+    })
+  } catch(e) {
+    console.error(e)
+    res.status(401).json({
+      error: "Failed to update general settings"
+    })
+  }
+})
+
 router.get('/', authMiddleware, async(req: any, res: Response) => {
     const userId = req.user.userId
 
@@ -75,6 +104,9 @@ router.get('/', authMiddleware, async(req: any, res: Response) => {
                 shopifyName: true,
                 lastSync: true,
                 syncing: true,
+                storeUrl: true,
+                currency: true,
+                industry: true,
             }
         })
 
