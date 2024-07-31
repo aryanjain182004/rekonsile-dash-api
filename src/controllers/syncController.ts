@@ -2,12 +2,15 @@ import { PrismaClient } from "@prisma/client";
 import Shopify from "shopify-api-node";
 import { getDatesInInterval } from "../routes/store";
 import { subYears } from "date-fns";
+import getSymbolFromCurrency from "currency-symbol-map";
 
 const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTime: Date, prisma: PrismaClient): Promise<void> => {
   let params: any = {
     limit: 250,
     created_at_max: currentTime.toISOString(),
   };
+
+  let currencyUpdated = false
 
   do {
     try {
@@ -22,6 +25,20 @@ const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTi
         const tax = parseFloat(order.total_tax);
         const cogs = (paid - tax) * 0.34;
         const grossProfit = paid - cogs;
+
+        if(!currencyUpdated) {
+          const currencyCode = order.current_total_price_set.shop_money.currency_code
+          const currencySymbol = getSymbolFromCurrency(currencyCode)
+          await prisma.store.update({
+            where: {
+              id: shopId
+            },
+            data: {
+              currency: `${currencySymbol} ${currencyCode}`,
+            }
+          })
+          currencyUpdated = true
+        }
 
         await prisma.order.create({
           data: {

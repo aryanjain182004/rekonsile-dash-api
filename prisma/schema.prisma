@@ -36,6 +36,9 @@ model Store {
   orders      Order[]
   products    Product[]
   metrics     Metric[]
+  currency    String
+  storeUrl    String
+  industry    String
   customerOrderHistory CustomerOrderHistory[]
 }
 
