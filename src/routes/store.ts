@@ -225,6 +225,73 @@ router.post('/resync-store', authMiddleware, async(req: any, res: Response) => {
   }
 })
 
+router.post('/disconnect-shopify', authMiddleware, async(req: any, res: Response) => {
+  const {storeId} = req.body;
+
+  try {
+
+    await prisma.store.update({
+      where: {
+        id: storeId
+      },
+      data: {
+        shopifyName: "",
+        accessToken: "",
+      }
+    })
+
+    await prisma.metric.deleteMany({
+      where: {
+        shopId: storeId
+      },
+    })
+
+    await prisma.$transaction(async(prisma) => {
+
+      await prisma.lineItem.deleteMany({
+        where: {
+          order: {
+            storeId: storeId,
+          },
+        },
+      });
+
+      await prisma.order.deleteMany({
+        where: {
+          storeId: storeId,
+        },
+      });
+    });
+
+    await prisma.$transaction(async(prisma) => {
+
+      await prisma.variant.deleteMany({
+        where: {
+          product: {
+            storeId: storeId,
+          },
+        },
+      });
+
+      await prisma.product.deleteMany({
+        where: {
+          storeId: storeId,
+        },
+      });
+    });
+
+    res.status(200).json({
+      message: "Disconnected from shopify successfully",
+    })
+
+  } catch(e) {
+    console.error(e)
+    res.status(500).json({
+      error: "Failed to disconnect from shopify"
+    })
+  }
+})
+
 interface SyncOrdersRequest {
   shopId: string;
 }

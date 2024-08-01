@@ -1,7 +1,8 @@
-import express from 'express';
-import authRoutes from './routes/auth';
+import express from 'express'
+import authRoutes from './routes/auth'
 import storeRoutes from './routes/store'
 import shopifyRoutes from './routes/shopify'
+import userRoutes from './routes/user'
 import { authMiddleware } from './middleware/authMiddleware';
 import cors from 'cors'
 import dotenv from 'dotenv';
@@ -25,6 +26,8 @@ app.use('/api/auth', authRoutes)
 app.use('/api/store', storeRoutes)
 
 app.use('/api/shopify', shopifyRoutes)
+
+app.use('/api/user', userRoutes)
 
 app.get('/protected', authMiddleware, (req, res) => {
   res.send('This is a protected route.');
