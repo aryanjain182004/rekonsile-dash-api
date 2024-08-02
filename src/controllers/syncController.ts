@@ -196,6 +196,19 @@ export const syncStoreData = async(storeId: string, prisma: PrismaClient) => {
         });
         return totalSales;
       });
+
+      const purchaseRevenueValues = timePeriod.map((date) => {
+        let purchaseRevenue = 0;
+        orders.forEach((order) => {
+          const orderDate = order.date.toISOString().split('T')[0];
+          if (date.toISOString().split('T')[0] === orderDate) {
+            order.lineItems.forEach( (item) => {
+              purchaseRevenue += item.paid
+            })
+          }
+        })
+        return purchaseRevenue
+      })
   
       const taxesValues = timePeriod.map((date) => {
         let totalSales = 0;
@@ -522,6 +535,11 @@ export const syncStoreData = async(storeId: string, prisma: PrismaClient) => {
           name: "Total Customers", 
           description: "The total number of unique customers who have made a purchase.",
           values: totalCustomerValues
+        },
+        {
+          name: "Purchase Revenue",
+          description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit",
+          values: purchaseRevenueValues
         }
       ];
   
@@ -723,6 +741,19 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
     });
     return totalSales;
   });
+
+  const purchaseRevenueValues = timePeriod.map((date) => {
+    let purchaseRevenue = 0;
+    orders.forEach((order) => {
+      const orderDate = order.date.toISOString().split('T')[0];
+      if (date.toISOString().split('T')[0] === orderDate) {
+        order.lineItems.forEach( (item) => {
+          purchaseRevenue += item.paid
+        })
+      }
+    })
+    return purchaseRevenue
+  })
 
   const taxesValues = timePeriod.map((date) => {
     let totalSales = 0;
@@ -1049,6 +1080,11 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
       name: "Total Customers", 
       description: "The total number of unique customers who have made a purchase.",
       values: totalCustomerValues
+    },
+    {
+      name: "Purchase Revenue",
+      description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit",
+      values: purchaseRevenueValues
     }
   ];
 
