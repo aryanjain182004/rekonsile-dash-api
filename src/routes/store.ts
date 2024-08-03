@@ -292,6 +292,90 @@ router.post('/disconnect-shopify', authMiddleware, async(req: any, res: Response
   }
 })
 
+router.post('/fetch-dashboard-metrics', authMiddleware, async(req: any, res: Response) => {
+  const { shopId, startDate, endDate } = req.body;
+
+  if (!shopId || !startDate || !endDate) {
+    return res.status(400).send('Missing required parameters: shopId, startDate, or endDate');
+  }
+
+  try {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    const metrics = await prisma.metric.findMany({
+      where: {
+        shopId,
+        date: {
+          gte: start,
+          lte: end,
+        },
+      },
+      orderBy: {
+        date: 'asc',
+      },
+    });
+
+    console.log(metrics)
+
+    const labels: string[] = eachDayOfInterval({ start, end }).map(date => format(date, 'd MMM'));
+    const metricsData: { [key: string]: any } = {};
+
+    const metricTypes = [
+      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: "₹", suffix: ""},
+      {name: 'Taxes', description: 'The total amount of taxes charged on orders during this period.', prefix: "₹", suffix: ""},
+      {name: 'Net Sales', description: 'Equates to gross sales + shipping - taxes - discounts - returns.', prefix: "₹", suffix: ""},
+      {name: 'Orders', description: 'Number of orders', prefix: "₹", suffix: ""},
+      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) and marketing costs from Net Sales.", prefix: "₹", suffix: ""},
+      {name: "Purchase Revenue", description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit", prefix: "₹", suffix: ""}
+    ]
+
+    metricTypes.forEach(metricType => {
+      metricsData[metricType.name] = {
+        name: metricType.name,
+        description: metricType.description,
+        prefix: metricType.prefix,
+        suffix: metricType.suffix,
+        values: new Array(labels.length).fill(0),
+        total: 0,
+      };
+    });
+
+    metrics.forEach((metric) => {
+
+      const dateStr = format(new Date(metric.date.toISOString().split('T')[0]), 'd MMM');
+      const dateIndex = labels.indexOf(dateStr);
+
+      console.log(metric.date, dateStr, dateIndex)
+
+      if (!metricsData[metric.metricType]) {
+        console.error(`Unexpected metricType: ${metric.metricType}`);
+      } else {
+        metricsData[metric.metricType].values[dateIndex] = metric.value;
+
+        metricsData[metric.metricType].total += metric.value;
+      }
+
+    })
+
+    const response = Object.values(metricsData).map((metric: any) => {
+      if (metric.name === "Gross Profit") {
+        metric.name = "Net Profit"
+      }
+      
+      metric.total = metric.total.toFixed(2);
+      metric.values = metric.values.map((v: any) => parseFloat(v.toFixed(2)))
+      return metric;
+    });
+
+    res.status(200).json({ metrics: response, labels });
+
+  } catch (e) {
+    console.error('Error fetching metric data:', e);
+    res.status(500).send('Internal Server Error');
+  }
+})
+
 interface SyncOrdersRequest {
   shopId: string;
 }
