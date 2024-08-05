@@ -325,7 +325,7 @@ router.post('/fetch-dashboard-metrics', authMiddleware, async(req: any, res: Res
       {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: "₹", suffix: ""},
       {name: 'Taxes', description: 'The total amount of taxes charged on orders during this period.', prefix: "₹", suffix: ""},
       {name: 'Net Sales', description: 'Equates to gross sales + shipping - taxes - discounts - returns.', prefix: "₹", suffix: ""},
-      {name: 'Orders', description: 'Number of orders', prefix: "₹", suffix: ""},
+      {name: 'Orders', description: 'Number of orders', prefix: "", suffix: ""},
       {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) and marketing costs from Net Sales.", prefix: "₹", suffix: ""},
       {name: "Purchase Revenue", description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit", prefix: "₹", suffix: ""}
     ]
@@ -373,6 +373,55 @@ router.post('/fetch-dashboard-metrics', authMiddleware, async(req: any, res: Res
   } catch (e) {
     console.error('Error fetching metric data:', e);
     res.status(500).send('Internal Server Error');
+  }
+})
+
+router.post('/fetch-goals', authMiddleware, async(req:any, res: Response) => {
+  const {  storeId} = req.body
+  try {
+    const store = await prisma.store.findUnique({
+      where: {
+        id: storeId
+      },
+      select: {
+        netSalesGoal: true,
+        adSpendGoal: true,
+      }
+    })
+
+    res.status(200).json({
+      store,
+    })
+
+  } catch(e) {
+    console.error("error updating goals", e)
+    res.status(500).send('failed to update goals')
+  }
+})
+
+router.post('/update-goals', authMiddleware, async(req:any, res: Response) => {
+  const { netSalesGoal, adSpendGoal, storeId} = req.body
+  try {
+    await prisma.store.update({
+      where: {
+        id: storeId
+      },
+      data: {
+        netSalesGoal,
+        adSpendGoal
+      }
+    })
+
+    res.status(201).json({
+      store : {
+        netSalesGoal,
+        adSpendGoal
+      }
+    })
+
+  } catch(e) {
+    console.error("error updating goals", e)
+    res.status(500).send('failed to update goals')
   }
 })
 

@@ -39,6 +39,8 @@ model Store {
   currency    String
   storeUrl    String
   industry    String
+  netSalesGoal Int      @default(0)
+  adSpendGoal  Int      @default(0)
   customerOrderHistory CustomerOrderHistory[]
 }
 
