@@ -19,8 +19,8 @@ model User {
   lastName  String
   email     String @unique
   password  String
-  verified  Boolean @default(true)  // Default to true since we are skipping verification
-  verificationToken String?  // This can be removed if not needed
+  verified  Boolean @default(false)  // Default to true since we are skipping verification
+  totpSecret String
   stores    Store[]
 }
 
