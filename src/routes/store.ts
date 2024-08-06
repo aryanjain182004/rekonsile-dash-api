@@ -399,23 +399,45 @@ router.post('/fetch-goals', authMiddleware, async(req:any, res: Response) => {
   }
 })
 
-router.post('/update-goals', authMiddleware, async(req:any, res: Response) => {
-  const { netSalesGoal, adSpendGoal, storeId} = req.body
+router.post('/update-ads-goal', authMiddleware, async(req:any, res: Response) => {
+  const { goal, storeId} = req.body
   try {
     await prisma.store.update({
       where: {
         id: storeId
       },
       data: {
-        netSalesGoal,
-        adSpendGoal
+        adSpendGoal: goal
       }
     })
 
     res.status(201).json({
       store : {
-        netSalesGoal,
-        adSpendGoal
+        adSpendGoal : goal
+      }
+    })
+
+  } catch(e) {
+    console.error("error updating goals", e)
+    res.status(500).send('failed to update goals')
+  }
+})
+
+router.post('/update-net-sales-goal', authMiddleware, async(req:any, res: Response) => {
+  const { goal, storeId} = req.body
+  try {
+    await prisma.store.update({
+      where: {
+        id: storeId
+      },
+      data: {
+        netSalesGoal: goal
+      }
+    })
+
+    res.status(201).json({
+      store : {
+        netSalesGoal : goal
       }
     })
 
