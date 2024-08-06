@@ -37,6 +37,7 @@
     "jsonwebtoken": "^9.0.2",
     "mongodb": "^6.7.0",
     "nodemailer": "^6.9.13",
-    "shopify-api-node": "^3.13.1"
+    "shopify-api-node": "^3.13.1",
+    "speakeasy": "^2.0.0"
   }
 }
