@@ -303,6 +303,17 @@ router.post('/fetch-dashboard-metrics', authMiddleware, async(req: any, res: Res
     const start = new Date(startDate);
     const end = new Date(endDate);
 
+    const store = await prisma.store.findUnique({
+      where: {
+        id: shopId
+      },
+      select: {
+        currency: true,
+      }
+    })
+
+    const currency = store?.currency.split(" ")[0] || ""
+
     const metrics = await prisma.metric.findMany({
       where: {
         shopId,
@@ -322,12 +333,12 @@ router.post('/fetch-dashboard-metrics', authMiddleware, async(req: any, res: Res
     const metricsData: { [key: string]: any } = {};
 
     const metricTypes = [
-      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: "₹", suffix: ""},
-      {name: 'Taxes', description: 'The total amount of taxes charged on orders during this period.', prefix: "₹", suffix: ""},
-      {name: 'Net Sales', description: 'Equates to gross sales + shipping - taxes - discounts - returns.', prefix: "₹", suffix: ""},
+      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: `${currency}`, suffix: ""},
+      {name: 'Taxes', description: 'The total amount of taxes charged on orders during this period.', prefix: `${currency}`, suffix: ""},
+      {name: 'Net Sales', description: 'Equates to gross sales + shipping - taxes - discounts - returns.', prefix: `${currency}`, suffix: ""},
       {name: 'Orders', description: 'Number of orders', prefix: "", suffix: ""},
-      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) and marketing costs from Net Sales.", prefix: "₹", suffix: ""},
-      {name: "Purchase Revenue", description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit", prefix: "₹", suffix: ""}
+      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) and marketing costs from Net Sales.", prefix: `${currency}`, suffix: ""},
+      {name: "Purchase Revenue", description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit", prefix: `${currency}`, suffix: ""}
     ]
 
     metricTypes.forEach(metricType => {
@@ -1925,6 +1936,17 @@ router.post('/fetch-metrics', async (req: Request, res: Response) => {
     const start = new Date(startDate);
     const end = new Date(endDate);
 
+    const store = await prisma.store.findUnique({
+      where: {
+        id: shopId
+      },
+      select: {
+        currency: true,
+      }
+    })
+
+    const currency = store?.currency.split(" ")[0] || ""
+
     const metrics = await prisma.metric.findMany({
       where: {
         shopId,
@@ -1958,17 +1980,17 @@ router.post('/fetch-metrics', async (req: Request, res: Response) => {
     // ];
 
     const metricTypes = [
-      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: "₹", suffix: ""},
-      {name: "Taxes", description: "The total amount of taxes charged on orders during this period.", prefix: "₹", suffix: ""},
-      {name: "Net Sales", description: "Equates to gross sales + shipping - taxes - discounts - returns.", prefix: "₹", suffix: ""},
+      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: `${currency}`, suffix: ""},
+      {name: "Taxes", description: "The total amount of taxes charged on orders during this period.", prefix: `${currency}`, suffix: ""},
+      {name: "Net Sales", description: "Equates to gross sales + shipping - taxes - discounts - returns.", prefix: `${currency}`, suffix: ""},
       // {name: "Returns", description: "The value of goods returned by a customer."},
-      {name: "COGS", description: "Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees", prefix: "₹", suffix: ""},
+      {name: "COGS", description: "Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees", prefix: `${currency}`, suffix: ""},
       {name: "COGS %", description: "Cost of Goods (COGS) as % of Net Sales", prefix: "", suffix: "%"},
       // {name: "Shipping Paid", description: "Shipping paid by customers as part of orders during this period."},
       // {name: "Shipping Cost", description: "The shipping cost paid by you to shipping providers. This amount is set under"},
       // {name: "Transaction Fees", description: "Card processing fees paid by customers as part of the order process. Includes FX fees charged by your payment processor for International Cards. Update under"},
       // {name: "Fulfillment Costs", description: "Cost of Fulfillment Pick & Pack Fees"},
-      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) from Net Sales.", prefix: "₹", suffix: ""},
+      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) from Net Sales.", prefix: `${currency}`, suffix: ""},
       {name: "Gross Profit %", description: "Gross Profit as a % of Net Sales", prefix: "", suffix: "%"},
       // {name: "Contribution Margin", description: "Net sales - COGS - Marketing Costs = Contribution Margin"},
       // {name: "Contribution Margin %", description: "Contribution Margin as a % of Net Sales"},
@@ -1991,13 +2013,13 @@ router.post('/fetch-metrics', async (req: Request, res: Response) => {
       // {name: "Acquisition MER", description: "Ratio of new customer revenue to ad spend. This metrics tells us how efficiently you're turning ad spend into revenue from new customers. Total New Customer Revenue / Total Ad Spend"},
       {name: "New Customers", description: "The number of first-time buyers during a specific period.", prefix: "", suffix: ""},
       {name: "Repeat Customers", description: "Customers who have made more than one purchase in their order history.", prefix: "", suffix: ""},
-      {name: "New Customer Sales", description: "Net Sales generated from new customers during this time period.", prefix: "₹", suffix: ""},
-      {name: "Repeat Customer Sales", description: "Net Sales generated from existing customers during this time period.", prefix: "₹", suffix: ""},
+      {name: "New Customer Sales", description: "Net Sales generated from new customers during this time period.", prefix: `${currency}`, suffix: ""},
+      {name: "Repeat Customer Sales", description: "Net Sales generated from existing customers during this time period.", prefix: `${currency}`, suffix: ""},
       // {name: "Gross Profit Per New Customer", description: "New Customer Net Sales - New Customer COGS."},
       // {name: "Gross Profit Per Repeat Customer", description: "Repeat Customer Net Sales - Repeat Customer COGS."},
-      {name: "New Customer AOV", description: "Average Value of Each Order from a New Customer. Total New Customer Sales / Number of New Customers.", prefix: "₹", suffix: ""},
-      {name: "Repeat Customer AOV", description: "Average Value of Each Order from a Repeat Customer. Total Repeat Customer Sales / Number of Repeat Customers.", prefix: "₹", suffix: ""},
-      {name: "AOV", description: "Average Value of Each Order Total Sales / Orders", prefix: "₹", suffix: ""},
+      {name: "New Customer AOV", description: "Average Value of Each Order from a New Customer. Total New Customer Sales / Number of New Customers.", prefix: `${currency}`, suffix: ""},
+      {name: "Repeat Customer AOV", description: "Average Value of Each Order from a Repeat Customer. Total Repeat Customer Sales / Number of Repeat Customers.", prefix: `${currency}`, suffix: ""},
+      {name: "AOV", description: "Average Value of Each Order Total Sales / Orders", prefix: `${currency}`, suffix: ""},
       {name: "Average No Of Items", description: "The average number of items per order. | Total Items Ordered / Total Orders.", prefix: "", suffix: ""},
       {name: "Total Customers", description: "The total number of unique customers who have made a purchase.", prefix: "", suffix: ""}
     ];
@@ -2103,6 +2125,17 @@ router.post('/fetch-finance-metrics', async (req: Request, res: Response) => {
     const start = new Date(startDate);
     const end = new Date(endDate);
 
+    const store = await prisma.store.findUnique({
+      where: {
+        id: shopId
+      },
+      select: {
+        currency: true,
+      }
+    })
+
+    const currency = store?.currency.split(" ")[0] || ""
+
     const metrics = await prisma.metric.findMany({
       where: {
         shopId,
@@ -2124,9 +2157,9 @@ router.post('/fetch-finance-metrics', async (req: Request, res: Response) => {
     let gpCount = 0;
 
     const metricTypes = [
-      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: "₹", suffix: ""},
-      {name: "COGS", description: "Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees", prefix: "₹", suffix: ""},
-      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) and marketing costs from Net Sales.", prefix: "₹", suffix: ""},
+      {name: "Total Sales", description: "Equates to gross sales - discounts - returns + taxes + shipping charges.", prefix: `${currency}`, suffix: ""},
+      {name: "COGS", description: "Equates to Product Costs + Shipping Costs + Fulfillment Costs + Packing Fees + Transaction Fees", prefix: `${currency}`, suffix: ""},
+      {name: "Gross Profit", description: "Calculated by subtracting Cost of Goods (COGS) and marketing costs from Net Sales.", prefix: `${currency}`, suffix: ""},
       {name: "Gross Profit %", description: "Net Profit as a % of Net Sales", prefix: "", suffix: "%"},
     ]
 
