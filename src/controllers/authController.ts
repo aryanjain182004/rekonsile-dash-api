@@ -19,8 +19,6 @@ const signup = async (req: Request, res: Response) => {
   const hashedPassword = await bcrypt.hash(password, 10);
 
   try {
-<<<<<<< HEAD
-=======
     const user = await prisma.user.findUnique({
       where: {
         email,
@@ -33,7 +31,6 @@ const signup = async (req: Request, res: Response) => {
       })
     }
 
->>>>>>> dev
     const secret = speakeasy.generateSecret({ length: 20 }).base32;
     const newUser = await prisma.user.create({
       data: {
@@ -146,23 +143,14 @@ const sendEmail = async (req: Request, res: Response) => {
 
   try {
     // Extract data from the request body
-<<<<<<< HEAD
-    const { email, firstName } = req.body;
-    const capitalizedName = firstName.charAt(0).toUpperCase() + firstName.slice(1);
-=======
     const { email } = req.body;
 
->>>>>>> dev
     const user = await prisma.user.findUnique({
       where: {
         email,
       },
       select: {
         totpSecret: true,
-<<<<<<< HEAD
-      }
-    })
-=======
         firstName: true,
       }
     })
@@ -175,7 +163,6 @@ const sendEmail = async (req: Request, res: Response) => {
     
     //@ts-ignore
     const capitalizedName = user.firstName.charAt(0).toUpperCase() + user.firstName.slice(1);
->>>>>>> dev
     const otp = speakeasy.totp({
       secret: user?.totpSecret!,
       encoding: "base32",
@@ -205,11 +192,7 @@ const sendEmail = async (req: Request, res: Response) => {
         process.env.NEXT_PUBLIC_OTP_NAME
       }&pass=${process.env.NEXT_PUBLIC_OTP_PASSWORD}&fromEmail=${
         process.env.NEXT_PUBLIC_OTP_FROM_EMAIL
-<<<<<<< HEAD
-      }&toEmail=${email}&fromName=Rekonsile&subject=Your%20One-Time%20Password%20(OTP)%20for%20Account%20Verification&msgPlain=Dear ${firstName},&msgHTML=${encodeURIComponent(
-=======
       }&toEmail=${email}&fromName=Rekonsile&subject=Your%20One-Time%20Password%20(OTP)%20for%20Account%20Verification&msgPlain=Dear ${capitalizedName},&msgHTML=${encodeURIComponent(
->>>>>>> dev
         msgHTML
       )}`
     );
@@ -220,11 +203,7 @@ const sendEmail = async (req: Request, res: Response) => {
     });
   } catch (error: any) {
     console.error(error)
-<<<<<<< HEAD
-    res.status(500).json({ error: 'Server failed'})
-=======
     res.status(500).json({ message: 'Server failed'})
->>>>>>> dev
   }
 };
 
@@ -298,29 +277,17 @@ const verifyOtp = async (req: Request, res: Response) => {
         })
       } else {
         res.status(400).json({
-<<<<<<< HEAD
-          status: "OTP is invalid",
-=======
           message: "OTP is invalid",
->>>>>>> dev
         })
       }
 
     } else {
       res.status(400).json({
-<<<<<<< HEAD
-        status: "error while getting user",
-      })
-    }
-  } catch (error: any) {
-    res.status(500).json({ error: 'Server failed'})
-=======
         message: "error while getting user",
       })
     }
   } catch (error: any) {
     res.status(500).json({ message: 'Server failed'})
->>>>>>> dev
   }
 };
 
