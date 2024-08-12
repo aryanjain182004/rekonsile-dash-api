@@ -71,8 +71,10 @@ const login = async (req: Request, res: Response) => {
     const user = await prisma.user.findUnique({ where: { email } });
 
     if (!user) {
-      return res.status(401).json({ message: 'Invalid email or password.' });
+      return res.status(401).json({ message: 'User with this email does not exist' });
     }
+
+    console.log(user)
 
     if(!user.verified) {
       return res.status(401).json({ message: 'User is not verified' });

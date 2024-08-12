@@ -1,8 +1,9 @@
 import { PrismaClient } from "@prisma/client";
 import Shopify from "shopify-api-node";
-import { getDatesInInterval } from "../routes/store";
+
 import { subYears } from "date-fns";
 import getSymbolFromCurrency from "currency-symbol-map";
+import { getDatesInInterval } from "./date";
 
 const fetchAndProcessOrders = async (shopify: Shopify, shopId: string, currentTime: Date, prisma: PrismaClient): Promise<void> => {
   let params: any = {
