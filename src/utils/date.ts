@@ -1,3 +1,5 @@
+import { eachDayOfInterval } from "date-fns";
+
 export function getDatesInMonth(year: number, month: number) {
     // Create an empty array to store the dates
     const dates = [];
@@ -18,4 +20,8 @@ export function getDatesInMonth(year: number, month: number) {
     }
     
     return dates;
+}
+
+export const getDatesInInterval = (startDate: Date, endDate: Date) => {
+    return eachDayOfInterval({ start: startDate, end: endDate });
 }
