@@ -15,7 +15,7 @@ const signup = async (req: Request, res: Response) => {
     return res.status(400).json({ errors: errors.array() });
   }
 
-  const { firstName, lastName, email, password } = req.body;
+  const { firstName, lastName, businessName, phoneNumber,  email, password } = req.body;
   const hashedPassword = await bcrypt.hash(password, 10);
 
   try {
@@ -39,6 +39,8 @@ const signup = async (req: Request, res: Response) => {
         email,
         password: hashedPassword,
         totpSecret: secret,
+        businessName,
+        phoneNumber
       },
     })
 
