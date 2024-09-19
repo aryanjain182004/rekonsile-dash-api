@@ -1,10 +1,7 @@
 import { Router } from 'express';
-import { Request, Response } from 'express';
 import { authMiddleware } from '../middleware/authMiddleware';
 import { PrismaClient } from '@prisma/client';
-import Shopify, { IOrder as ShopifyOrder } from 'shopify-api-node';
-import { eachDayOfInterval, format, subYears } from 'date-fns';
-import { getDatesInMonth } from '../utils/date';
+import facebookRoutes from './facebook'
 import { checkStoreSync, createStore, disconnectShopify, fetchDashboardMetrics, fetchFinanceMetrics, fetchGoals, fetchMetrics, fetchOrders, fetchProducts, fetchSpotlightData, getStores, resyncStore, syncStore, updateAccessToken, updateAdsGoal, updateGeneralSettings, updateNetSalesGoal } from '../controllers/storeController';
 
 const router = Router();
@@ -1250,6 +1247,8 @@ router.post('/fetch-finance-metrics', fetchFinanceMetrics)
 
 
 router.post('/spotlight', fetchSpotlightData);
+
+router.use('/facebook', facebookRoutes)
 
 
 // router.post('/old-metrics', async(req: Request, res: Response) => {
