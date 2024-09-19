@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
-import { resyncStoreData, syncStoreData } from '../utils/sync';
+import { resyncStoreData, syncStoreData, syncStoreData2 } from '../utils/sync';
 import { eachDayOfInterval, format } from 'date-fns';
 import { ExportedLineItem, ExportedOrder, ExportOrdersRequest } from '../types/orders';
 
@@ -148,7 +148,7 @@ export const syncStore = async (req: any, res: Response) => {
             data: { syncing: true },
         });
 
-        syncStoreData(storeId, prisma);
+        syncStoreData2(storeId, prisma);
 
         res.status(200).json({ message: "Store data is syncing" });
     } catch (error) {
