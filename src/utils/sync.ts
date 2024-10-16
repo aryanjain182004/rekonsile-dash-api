@@ -954,6 +954,8 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
       }
   }
 
+  console.log(`data resync started for ${store.name} at ${new Date().toTimeString()}`)
+
   const { shopifyName:shopName , accessToken, lastSync } = store;
 
   const shopify = new Shopify({
@@ -966,10 +968,59 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
     limit: 250,
     created_at_min: lastSync.toISOString(),
     created_at_max: currentTime.toISOString(),
+    order: 'created_at asc',
+  };
+
+  const startDate = new Date(lastSync)
+  startDate.setHours(0,0,0,0)
+
+  const timePeriod = getDatesInInterval(lastSync, currentTime);
+
+  // Fetch existing customer order histories
+  const existingCustomers = await prisma.customerOrderHistory.findMany({
+    where: { shopId: storeId },
+  });
+
+  const customerOrderHistory = existingCustomers.reduce((acc, customer) => {
+    acc[customer.customerId] = customer.orderDates;
+    return acc;
+  }, {} as { [key: string]: Date[] });
+
+  // Initialize metric objects
+  const metrics: { [key: string]: number[] } = {
+    totalSales: Array(timePeriod.length).fill(0),
+    taxes: Array(timePeriod.length).fill(0),
+    netSales: Array(timePeriod.length).fill(0),
+    cogs: Array(timePeriod.length).fill(0),
+    grossProfit: Array(timePeriod.length).fill(0),
+    orders: Array(timePeriod.length).fill(0),
+    newCustomerOrders: Array(timePeriod.length).fill(0),
+    newCustomers: Array(timePeriod.length).fill(0),
+    repeatCustomers: Array(timePeriod.length).fill(0),
+    newCustomerSales: Array(timePeriod.length).fill(0),
+    repeatCustomerSales: Array(timePeriod.length).fill(0),
+    totalItems: Array(timePeriod.length).fill(0),
+    totalCustomers: Array(timePeriod.length).fill(0),
+    purchaseRevenue: Array(timePeriod.length).fill(0),
+  };
+
+  const totalCustomers = Array.from({ length: timePeriod.length }, () => new Set())
+  const uniqueCustomers = new Set<string>();
+  const newCustomers = new Set<string>();
+  const repeatCustomers = new Set<string>();
+
+  // Helper function to check if a customer is new
+  const isNewCustomer = (customerId: string, orderDate: Date) => {
+    if (!customerOrderHistory[customerId]) return true;
+    return !customerOrderHistory[customerId].some(date => date < orderDate);
   };
 
   while (hasMoreOrders) {
+    console.log("fetching orders from shopify", orderParams)
+    
     const orders = await shopify.order.list(orderParams);
+
+    console.log('orders fetched successfully from shopify')
 
     if (orders.length < orderParams.limit) {
       hasMoreOrders = false;
@@ -981,6 +1032,8 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
       }
     }
 
+    const prismaOrders = []
+
     for (const order of orders) {
       // Calculate grossProfit and cogs for the order
       const paid = parseFloat(order.total_price);
@@ -988,7 +1041,7 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
       const cogs = (paid - tax) * 0.34;
       const grossProfit = paid - cogs;
 
-      await prisma.order.create({
+      const ordersToPush = await prisma.order.create({
         data: {
           date: new Date(order.created_at),
           orderId: order.order_number.toString(),
@@ -1026,10 +1079,54 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
               };
             })
           }
+        },
+        include: {
+          lineItems: true
         }
       });
+
+      prismaOrders.push(ordersToPush)
+    }
+
+    for (const order of prismaOrders) {
+      const orderDate = order.date.toISOString().split('T')[0];
+      const dateIndex = timePeriod.findIndex(date => date.toISOString().split('T')[0] === orderDate);
+      
+      if (dateIndex === -1) continue;
+  
+      const { customerId, paid, tax, cogs } = order;
+      const netSale = paid - tax;
+      metrics.totalSales[dateIndex] += paid;
+      metrics.taxes[dateIndex] += tax;
+      metrics.netSales[dateIndex] += netSale;
+      metrics.cogs[dateIndex] += cogs;
+      metrics.grossProfit[dateIndex] += netSale - cogs;
+      metrics.orders[dateIndex]++;
+      metrics.purchaseRevenue[dateIndex] += order.lineItems.reduce((sum, item) => sum + item.paid, 0);
+      metrics.totalItems[dateIndex] += order.lineItems.reduce((sum, item) => sum + item.quantity, 0);
+  
+      uniqueCustomers.add(customerId);
+      totalCustomers[dateIndex].add(customerId)
+      
+      if (isNewCustomer(customerId, order.date)) {
+        newCustomers.add(customerId);
+        metrics.newCustomers[dateIndex]++;
+        metrics.newCustomerOrders[dateIndex]++;
+        metrics.newCustomerSales[dateIndex] += netSale;
+      } else {
+        repeatCustomers.add(customerId);
+        metrics.repeatCustomers[dateIndex]++;
+        metrics.repeatCustomerSales[dateIndex] += netSale;
+      }
+      
+      if (!customerOrderHistory[customerId]) {
+        customerOrderHistory[customerId] = [];
+      }
+      customerOrderHistory[customerId].push(order.date);
     }
   }
+
+  console.log(`fetched and stored orders successfully for ${store.name} at ${new Date().toTimeString()}`)
 
   let hasMoreProducts = true;
     let productParams: any = {
@@ -1039,141 +1136,60 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
     };
 
   while (hasMoreProducts) {
-      const products = await shopify.product.list(productParams);
+    console.log('fetching products with parameters', productParams)
+    const products = await shopify.product.list(productParams);
+    console.log('successfully fetched products')
 
       if (products.length < productParams.limit) {
         hasMoreProducts = false;
       } else {
-        const lastProduct = products[products.length - 1];
-        productParams = { ...productParams, since_id: lastProduct.id };
+        const page_info = products.nextPageParameters?.page_info;
+        productParams = { 
+          limit: 250,
+          page_info,
+        };
       }
 
-      for (const product of products) {
-        const createdProduct = await prisma.product.upsert({
-          where: { productId: product.id.toString() },
-          update: {
-            title: product.title,
-            storeId,
-          },
-          create: {
-            productId: product.id.toString(),
-            title: product.title,
-            storeId,
-          },
-        });
-
-        for (const variant of product.variants) {
-          await prisma.variant.upsert({
-            where: { variantId: variant.id.toString() },
+      try {
+        for (const product of products) {
+          const createdProduct = await prisma.product.upsert({
+            where: { productId: product.id.toString() },
             update: {
-              title: variant.title,
-              price: parseFloat(variant.price),
-              inventoryQuantity: variant.inventory_quantity,
-              productId: createdProduct.id,
+              title: product.title,
+              storeId,
             },
             create: {
-              variantId: variant.id.toString(),
-              title: variant.title,
-              price: parseFloat(variant.price),
-              inventoryQuantity: variant.inventory_quantity,
-              productId: createdProduct.id,
+              productId: product.id.toString(),
+              title: product.title,
+              storeId,
             },
           });
+  
+          for (const variant of product.variants) {
+            await prisma.variant.upsert({
+              where: { variantId: variant.id.toString() },
+              update: {
+                title: variant.title,
+                price: parseFloat(variant.price),
+                inventoryQuantity: variant.inventory_quantity,
+                productId: createdProduct.id,
+              },
+              create: {
+                variantId: variant.id.toString(),
+                title: variant.title,
+                price: parseFloat(variant.price),
+                inventoryQuantity: variant.inventory_quantity,
+                productId: createdProduct.id,
+              },
+            });
+          }
         }
+      } catch(e) {
+        console.error("error while updating products", e)
       }
   }
 
-  const startDate = new Date(lastSync)
-  startDate.setHours(0,0,0,0)
-  const orders = await prisma.order.findMany({
-    where: {
-      storeId,
-      date: {
-        gte: startDate,
-      },
-    },
-    include: { lineItems: true },
-  });
-
-  const endDate = new Date();
-  const timePeriod = getDatesInInterval(lastSync, endDate);
-
-  // Fetch existing customer order histories
-  const existingCustomers = await prisma.customerOrderHistory.findMany({
-    where: { shopId: storeId },
-  });
-
-  const customerOrderHistory = existingCustomers.reduce((acc, customer) => {
-    acc[customer.customerId] = customer.orderDates;
-    return acc;
-  }, {} as { [key: string]: Date[] });
-
-  // Initialize metric objects
-  const metrics: { [key: string]: number[] } = {
-    totalSales: Array(timePeriod.length).fill(0),
-    taxes: Array(timePeriod.length).fill(0),
-    netSales: Array(timePeriod.length).fill(0),
-    cogs: Array(timePeriod.length).fill(0),
-    grossProfit: Array(timePeriod.length).fill(0),
-    orders: Array(timePeriod.length).fill(0),
-    newCustomerOrders: Array(timePeriod.length).fill(0),
-    newCustomers: Array(timePeriod.length).fill(0),
-    repeatCustomers: Array(timePeriod.length).fill(0),
-    newCustomerSales: Array(timePeriod.length).fill(0),
-    repeatCustomerSales: Array(timePeriod.length).fill(0),
-    totalItems: Array(timePeriod.length).fill(0),
-    totalCustomers: Array(timePeriod.length).fill(0),
-    purchaseRevenue: Array(timePeriod.length).fill(0),
-  };
-
-  const uniqueCustomers = new Set<string>();
-  const newCustomers = new Set<string>();
-  const repeatCustomers = new Set<string>();
-
-  // Helper function to check if a customer is new
-  const isNewCustomer = (customerId: string, orderDate: Date) => {
-    if (!customerOrderHistory[customerId]) return true;
-    return !customerOrderHistory[customerId].some(date => date < orderDate);
-  };
-
-  // Process orders in a single loop
-  for (const order of orders) {
-    const orderDate = order.date.toISOString().split('T')[0];
-    const dateIndex = timePeriod.findIndex(date => date.toISOString().split('T')[0] === orderDate);
-    
-    if (dateIndex === -1) continue;
-
-    const { customerId, paid, tax, cogs } = order;
-    const netSale = paid - tax;
-
-    metrics.totalSales[dateIndex] += paid;
-    metrics.taxes[dateIndex] += tax;
-    metrics.netSales[dateIndex] += netSale;
-    metrics.cogs[dateIndex] += cogs;
-    metrics.grossProfit[dateIndex] += netSale - cogs;
-    metrics.orders[dateIndex]++;
-    metrics.purchaseRevenue[dateIndex] += order.lineItems.reduce((sum, item) => sum + item.paid, 0);
-    metrics.totalItems[dateIndex] += order.lineItems.reduce((sum, item) => sum + item.quantity, 0);
-
-    uniqueCustomers.add(customerId);
-    metrics.totalCustomers[dateIndex] = uniqueCustomers.size;
-
-    if (isNewCustomer(customerId, order.date)) {
-      newCustomers.add(customerId);
-      metrics.newCustomers[dateIndex]++;
-      metrics.newCustomerOrders[dateIndex]++;
-      metrics.newCustomerSales[dateIndex] += netSale;
-    } else {
-      repeatCustomers.add(customerId);
-      metrics.repeatCustomers[dateIndex]++;
-      metrics.repeatCustomerSales[dateIndex] += netSale;
-    }
-
-    if (!customerOrderHistory[customerId]) {
-      customerOrderHistory[customerId] = [];
-    }
-    customerOrderHistory[customerId].push(order.date);
-  }
+  console.log(`fetched and stored products successfully for ${store.name} at ${new Date().toTimeString()}`)
 
   // Calculate derived metrics
   const derivedMetrics = {
@@ -1183,6 +1199,7 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
     anoi: metrics.totalItems.map((v, i) => metrics.orders[i] ? v / metrics.orders[i] : 0),
     newCustomerAov: metrics.newCustomerSales.map((v, i) => metrics.newCustomerOrders[i] ? v / metrics.newCustomerOrders[i] : 0),
     repeatCustomerAov: metrics.repeatCustomerSales.map((v, i) => (metrics.orders[i] - metrics.newCustomerOrders[i]) ? v / (metrics.orders[i] - metrics.newCustomerOrders[i]) : 0),
+    totalCustomers: totalCustomers.map((v) => v.size)
   };
 
   // Save updated customer order histories
@@ -1201,6 +1218,8 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
       },
     });
   }
+
+  console.log('updated customer orders history sucessfully')
 
   // Define metrics data
   const metricsData = [
@@ -1226,32 +1245,39 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
   ];
 
   // Save metrics to the database
-  for (const metric of metricsData) {
-    for (let i = 0; i < timePeriod.length; i++) {
-      if(metric.values[i]){
-        await prisma.metric.upsert({
-          where: {
-            shopId_date_metricType: {
+  try {
+    for (const metric of metricsData) {
+      console.log(`updating metric ${metric.name}`)
+      for (let i = 0; i < timePeriod.length; i++) {
+        if(metric.values[i]){
+          await prisma.metric.upsert({
+            where: {
+              shopId_date_metricType: {
+                shopId: storeId,
+                date: timePeriod[i],
+                metricType: metric.name,
+              },
+            },
+            update: {
+              value: metric.values[i],
+              description: metric.description,
+            },
+            create: {
               shopId: storeId,
               date: timePeriod[i],
               metricType: metric.name,
+              value: metric.values[i],
+              description: metric.description,
             },
-          },
-          update: {
-            value: metric.values[i],
-            description: metric.description,
-          },
-          create: {
-            shopId: storeId,
-            date: timePeriod[i],
-            metricType: metric.name,
-            value: metric.values[i],
-            description: metric.description,
-          },
-        });
+          });
+        }
       }
     }
+  } catch(e) {
+    console.error("error while uploading metrics", e)
   }
+
+  console.log(`calculated and stored metrics successfully for ${store.name} at ${new Date().toTimeString()}`)
 
   // Update lastSync time in the database to current time
   await prisma.store.update({
@@ -1261,4 +1287,6 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
       syncing: false
     },
   });
+
+  console.log(`data sync completed successfully for ${store.name} at ${new Date().toTimeString()}`)
 }
