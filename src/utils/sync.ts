@@ -1,7 +1,7 @@
 import { PrismaClient } from "@prisma/client";
 import Shopify from "shopify-api-node";
 
-import { subMonths } from "date-fns";
+import { subMonths, subYears } from "date-fns";
 import getSymbolFromCurrency from "currency-symbol-map";
 import { getDatesInInterval } from "./date";
 import { start } from "repl";
@@ -615,14 +615,18 @@ export const syncStoreData2 = async(storeId: string, prisma: PrismaClient ) => {
 
   const { shopifyName:shopName , accessToken, lastSync } = store;
 
+  console.log(shopName, "Shop Name")
+
   const shopify = new Shopify({
-    shopName: shopName,
-    accessToken: accessToken,
+    shopName,
+    accessToken,
   });
+
+  console.log("Shopify account: ", shopify)
 
   let hasMoreOrders = true;
 
-  const startDate = subMonths(currentTime, 6)
+  const startDate = subYears(currentTime, 5)
   startDate.setHours(0,0,0,0)
 
   let orderParams: any = {
@@ -893,7 +897,7 @@ export const syncStoreData2 = async(storeId: string, prisma: PrismaClient ) => {
     { name: "Purchase Revenue", description: "Income generated from the sale of goods, calculated by multiplying the number of units sold by the price per unit", values: metrics.purchaseRevenue }
   ];
 
-  console.log('started storing metrics')
+  console.log('started storing metrics', metricsData)
   // Save metrics to the database
 
   try {
@@ -970,6 +974,8 @@ export const resyncStoreData = async(storeId: string, prisma: PrismaClient, curr
     created_at_max: currentTime.toISOString(),
     order: 'created_at asc',
   };
+
+  console.log(orderParams)
 
   const startDate = new Date(lastSync)
   startDate.setHours(0,0,0,0)
