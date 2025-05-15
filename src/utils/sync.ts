@@ -626,7 +626,13 @@ export const syncStoreData2 = async(storeId: string, prisma: PrismaClient ) => {
 
   let hasMoreOrders = true;
 
-  const startDate = subYears(currentTime, 5)
+  // const startDate = subYears(currentTime, 5)
+  // startDate.setHours(0,0,0,0)
+    // const startDate = subYears(currentTime, 5)
+  const startDate = subMonths(currentTime, 3);
+  // const startDate = subDays(currentTime, 2);
+  // const startDate = await getStoreStartDate(shopify);
+  console.log("STARTDATE", startDate);
   startDate.setHours(0,0,0,0)
 
   let orderParams: any = {
