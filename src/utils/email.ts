@@ -10,7 +10,7 @@ const transporter = nodemailer.createTransport({
 });
 
 const sendVerificationEmail = async (email: string, token: string) => {
-  const url = `http://localhost:3000/auth/verify-email?token=${token}`;
+  const url = `https://rekonsile-dash-api.onrender.com/auth/verify-email?token=${token}`;
   await transporter.sendMail({
     from: process.env.EMAIL_USER,
     to: email,
